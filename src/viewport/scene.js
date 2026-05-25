@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createJiboRig } from './jibo.js';
 
 export function createViewport(hostEl) {
   const scene = new THREE.Scene();
@@ -42,28 +43,7 @@ export function createViewport(hostEl) {
   floor.rotation.x = -Math.PI / 2;
   scene.add(floor);
 
-  // Placeholder Jibo: three stacked cylinders. This is *not* the real body —
-  // it's an M0 stand-in so we can see the viewport working end-to-end. The
-  // articulated model with the three actual motor joints lands in M1.
-  const bodyGroup = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0xe8eaed, roughness: 0.5, metalness: 0.05 });
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 0.06, 48), mat);
-  base.position.y = 0.03;
-  const mid = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.08, 48), mat);
-  mid.position.y = 0.10;
-  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.12, 48), mat);
-  head.position.y = 0.20;
-  bodyGroup.add(base, mid, head);
-  scene.add(bodyGroup);
-
-  // Placeholder LED ring stub at the seam between mid and head.
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.082, 0.005, 8, 64),
-    new THREE.MeshBasicMaterial({ color: 0x4ec9ff })
-  );
-  ring.position.y = 0.14;
-  ring.rotation.x = Math.PI / 2;
-  scene.add(ring);
+  const rig = createJiboRig(scene);
 
   // Resize handling
   function resize() {
@@ -103,6 +83,7 @@ export function createViewport(hostEl) {
     dispose,
     scene,
     camera,
-    renderer
+    renderer,
+    rig
   };
 }
