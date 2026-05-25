@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jibo Web Simulator</title>
+<link rel="stylesheet" href="assets/css/main.css">
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<header id="topbar">
+  <span class="brand">Jibo Web Sim</span>
+  <span class="status" id="status">M0 &middot; scaffolding</span>
+  <span class="spacer"></span>
+  <button id="btn-reset-view" type="button">Reset view</button>
+</header>
+
+<main id="stage">
+  <section id="viewport" aria-label="3D viewport"></section>
+
+  <aside id="sidebar">
+    <nav id="tabs" role="tablist">
+      <button role="tab" data-tab="chat" aria-selected="true">Chat</button>
+      <button role="tab" data-tab="lps">LPS</button>
+      <button role="tab" data-tab="audio">Audio</button>
+      <button role="tab" data-tab="tts">TTS</button>
+      <button role="tab" data-tab="notes">Notifications</button>
+    </nav>
+    <div id="tab-panels">
+      <div class="panel" data-panel="chat" hidden></div>
+      <div class="panel" data-panel="lps" hidden></div>
+      <div class="panel" data-panel="audio" hidden></div>
+      <div class="panel" data-panel="tts" hidden></div>
+      <div class="panel" data-panel="notes" hidden></div>
+    </div>
+  </aside>
+</main>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

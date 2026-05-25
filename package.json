@@ -1,0 +1,14 @@
+{
+  "name": "jibo-web-sim",
+  "version": "0.0.1",
+  "description": "Browser-only re-implementation of the Jibo SDK simulator (jibo sim). Vanilla JS + Three.js.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
