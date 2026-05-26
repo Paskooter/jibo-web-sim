@@ -1,0 +1,91 @@
+#Jibo Material
+#author: jmerrin
+
+newmtl jibo_head
+
+Ka 1.000 1.000 1.000
+
+Ks 0.000 0.000 0.000
+Ke 0.000 0.000 0.000
+Kd 1.000 1.000 1.000
+d 1.0
+Ns 30.7278733
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+
+newmtl jibo_mask
+
+Ka 1.000 1.000 1.000
+
+Ks 0.000 0.000 0.000
+Ke 0.000 0.000 0.000
+d 1.0
+Ns 0
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+newmtl jibo_lightring
+
+Ka 0.000 0.000 0.000
+
+Ks 0.000 0.000 0.000
+Ke 0.000 0.000 0.000
+Kd 0.000 0.000 0.000
+d 1.0
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+newmtl jibo_base
+
+Ka 1.000 1.000 1.000
+
+Ks 0.102571 0.102571 0.102571
+Ke 0.000 0.000 0.000
+Kd 1.000 1.000 1.000
+d 1.0
+Ns 30.7278733
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+newmtl jibo_pelvis
+
+Ka 1.000 1.000 1.000
+
+Ks 0.102571 0.102571 0.102571
+Ke 0.000 0.000 0.000
+Kd 1.000 1.000 1.000
+d 1.0
+Ns 30.7278733
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+
+newmtl jibo_screen
+
+Ka 0.000 0.000 0.000
+
+Ks 0.000 0.000 0.000
+Ke 1.000 1.000 1.000
+Kd 0.000 0.000 0.000
+d 1.0
+Ns 0.000
+illum 2
+
+map_Kd jibo_texture_01.jpg
+
+
+newmtl jibo_torso
+
+Ka 1.000 1.000 1.000
+
+Ks 0.102571 0.102571 0.102571
+Ke 0.000 0.000 0.000
+d 1.0
+Ns 30.7278733
+illum 2

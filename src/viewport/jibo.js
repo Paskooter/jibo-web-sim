@@ -1,174 +1,153 @@
 // Articulated Jibo rig.
 //
-// Joint hierarchy (nested groups; each child inherits its parent's transform):
+// Joint hierarchy:
 //
-//   scene
-//   └── root                       (overall placement)
-//       ├── base                   (fixed pedestal)
-//       └── yaw                    (rotates around Y at the base seam)
-//           ├── lowerShell         (visible piece between base and pitch pivot)
-//           └── pitch              (rotates around X at the mid seam)
-//               ├── upperShell     (visible piece between pitch and head pivot)
-//               └── roll           (rotates around Z at the head seam)
-//                   ├── head       (head shell)
-//                   ├── facePlate  (flat angled disc where the screen will live)
-//                   └── ledRing    (N segments, individually colorable)
+//   root
+//   ├── base                       (fixed pedestal)
+//   └── yaw                        (rotates around Y at the base/pelvis seam)
+//       ├── pelvis
+//       ├── lightring              (the LED ring; tintable for now)
+//       └── pitch                  (rotates around X at the pelvis/torso seam)
+//           ├── torso
+//           └── roll               (rotates around Z at the torso/head seam)
+//               ├── head
+//               ├── mask           (face mask, sits on the head)
+//               └── screen         (4-vertex billboard plane; iframe in M2)
 //
-// The three rotation groups (yaw / pitch / roll) are deliberately positioned
-// AT the seam they pivot around, so their children render forward of that
-// seam without offset math.
+// The joint groups sit at their pivot points; meshes are added with
+// `position.y = -pivot` so the OBJ vertices (which are in *world* coords)
+// land back at their original world positions when rotations are zero.
 //
-// This is geometry-only; no skill / shim binding yet. The shim layer in M2
-// will call setYaw/setPitch/setRoll and the LED setters over postMessage.
+// `createJiboRig(scene)` returns the rig handle synchronously. The 3D parts
+// load asynchronously and attach themselves once ready. Sliders work the
+// whole time because they only twist the empty joint groups.
+//
+// Assets: mitmedialab/Jibo_Models (MIT) cached under assets/jibo-model/.
 
 import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-const LED_COUNT = 12;
-const SEAM_BASE_TOP   = 0.05;  // y of base/yaw seam
-const SEAM_PITCH      = 0.13;  // y of yaw/pitch seam
-const SEAM_ROLL       = 0.20;  // y of pitch/roll (head) seam
+const MODEL_DIR = 'assets/jibo-model/';
+const MTL_FILE  = 'jibomtl.mtl';
 
-const SHELL_MAT = new THREE.MeshStandardMaterial({
-  color: 0xe6e8eb, roughness: 0.55, metalness: 0.05
-});
-const FACE_MAT = new THREE.MeshStandardMaterial({
-  color: 0x0a0c10, roughness: 0.35, metalness: 0.1
-});
+// Pivot Y positions in world space, derived from the OBJ bbox overlaps.
+const PIVOT_YAW   = 0.00;
+const PIVOT_PITCH = 0.06;
+const PIVOT_ROLL  = 0.11;
 
-function makeShell(r1, r2, h, yCenter) {
-  // Truncated cylinder, smooth-shaded.
-  const geom = new THREE.CylinderGeometry(r2, r1, h, 64, 1, false);
-  const mesh = new THREE.Mesh(geom, SHELL_MAT);
-  mesh.position.y = yCenter;
-  return mesh;
-}
+// Mesh files and which joint group they attach to.
+// `pivot` is the cumulative world-Y of that joint, used to compensate so
+// world coords are preserved at zero rotation.
+const PARTS = [
+  { file: 'baseMeshMesh.obj',          attach: 'root',  pivot: 0           },
+  { file: 'pelvisMeshMesh.obj',        attach: 'yaw',   pivot: PIVOT_YAW   },
+  { file: 'lightringMeshMesh.obj',     attach: 'yaw',   pivot: PIVOT_YAW,
+    role: 'lightring' },
+  { file: 'torsoMeshMesh.obj',         attach: 'pitch', pivot: PIVOT_PITCH },
+  { file: 'headMeshMesh.obj',          attach: 'roll',  pivot: PIVOT_ROLL  },
+  { file: 'maskMeshMesh.obj',          attach: 'roll',  pivot: PIVOT_ROLL  },
+  { file: 'screenMeshBillboardMesh.obj', attach: 'roll', pivot: PIVOT_ROLL,
+    role: 'screen' },
+];
 
 export function createJiboRig(scene) {
   const root = new THREE.Group();
   root.name = 'jibo';
   scene.add(root);
 
-  // --- Base (fixed) ---
-  const base = makeShell(0.11, 0.105, SEAM_BASE_TOP, SEAM_BASE_TOP / 2);
-  base.name = 'base';
-  root.add(base);
-
-  // --- Yaw group ---
-  const yaw = new THREE.Group();
-  yaw.name = 'yaw';
-  yaw.position.y = SEAM_BASE_TOP;
+  const yaw = new THREE.Group();   yaw.name   = 'yaw';
+  yaw.position.y = PIVOT_YAW;
   root.add(yaw);
 
-  // Lower shell (visible piece between yaw seam and pitch seam).
-  // Its local y starts at 0 because we sit at SEAM_BASE_TOP via the yaw group.
-  const lowerH = SEAM_PITCH - SEAM_BASE_TOP;
-  const lowerShell = makeShell(0.105, 0.09, lowerH, lowerH / 2);
-  lowerShell.name = 'lowerShell';
-  yaw.add(lowerShell);
-
-  // --- Pitch group ---
-  const pitch = new THREE.Group();
-  pitch.name = 'pitch';
-  pitch.position.y = lowerH;          // sits at the pitch seam
+  const pitch = new THREE.Group(); pitch.name = 'pitch';
+  pitch.position.y = PIVOT_PITCH - PIVOT_YAW;
   yaw.add(pitch);
 
-  // Upper shell (between pitch seam and roll seam).
-  const upperH = SEAM_ROLL - SEAM_PITCH;
-  const upperShell = makeShell(0.09, 0.08, upperH, upperH / 2);
-  upperShell.name = 'upperShell';
-  pitch.add(upperShell);
-
-  // --- Roll group ---
-  const roll = new THREE.Group();
-  roll.name = 'roll';
-  roll.position.y = upperH;           // sits at the roll seam (head pivot)
+  const roll = new THREE.Group();  roll.name  = 'roll';
+  roll.position.y = PIVOT_ROLL - PIVOT_PITCH;
   pitch.add(roll);
 
-  // Head: a dome-ish shape — short truncated cone + cap.
-  const headH = 0.08;
-  const headShell = makeShell(0.08, 0.07, headH, headH / 2);
-  headShell.name = 'head';
-  roll.add(headShell);
-  const headCap = new THREE.Mesh(
-    new THREE.SphereGeometry(0.07, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2),
-    SHELL_MAT
-  );
-  headCap.position.y = headH;
-  roll.add(headCap);
+  const groups = { root, yaw, pitch, roll };
 
-  // Face plate: a dark angled disc on the front of the head. Tilted forward
-  // ~15° so it faces a viewer sitting in front of Jibo, matching the real
-  // robot's screen angle. This is the surface that the skill iframe will
-  // eventually be perspective-projected onto.
-  const facePlate = new THREE.Mesh(
-    new THREE.CircleGeometry(0.058, 48),
-    FACE_MAT
-  );
-  facePlate.name = 'facePlate';
-  // Position on the front (+Z) face of the head.
-  facePlate.position.set(0, headH * 0.55, 0.064);
-  facePlate.rotation.x = THREE.MathUtils.degToRad(-15);  // tilt up toward viewer
-  roll.add(facePlate);
-
-  // --- LED ring ---
-  // N flat boxes arranged around a circle at the lower seam. Each segment is
-  // a separate material so we can set them independently. Sits at the yaw
-  // seam (so it stays put when only the head moves).
-  const ledRing = new THREE.Group();
-  ledRing.name = 'ledRing';
-  ledRing.position.y = SEAM_BASE_TOP + 0.002;   // just above the base
-  root.add(ledRing);
-
-  const ledRadius = 0.106;
-  const ledSegW = (2 * Math.PI * ledRadius) / LED_COUNT * 0.85;
-  const ledSegH = 0.008;
-  const ledSegD = 0.004;
-  const ledMaterials = [];
-  for (let i = 0; i < LED_COUNT; i++) {
-    const mat = new THREE.MeshBasicMaterial({ color: 0x202830 });
-    ledMaterials.push(mat);
-    const seg = new THREE.Mesh(
-      new THREE.BoxGeometry(ledSegW, ledSegH, ledSegD),
-      mat
-    );
-    const theta = (i / LED_COUNT) * Math.PI * 2;
-    seg.position.set(Math.sin(theta) * ledRadius, 0, Math.cos(theta) * ledRadius);
-    seg.lookAt(0, 0, 0);
-    ledRing.add(seg);
-  }
-
-  // --- Public API ---
+  // Parts that we want handles to after the model finishes loading.
+  const parts = { lightring: null, screen: null };
 
   function setYaw(rad)   { yaw.rotation.y   = rad; }
   function setPitch(rad) { pitch.rotation.x = rad; }
   function setRoll(rad)  { roll.rotation.z  = rad; }
 
-  function setLed(i, color) {
-    if (i < 0 || i >= LED_COUNT) return;
-    ledMaterials[i].color.set(color);
-  }
-
   function setAllLeds(color) {
-    for (const m of ledMaterials) m.color.set(color);
+    if (!parts.lightring) return;
+    // The lightring imports as a Group of one Mesh. Tint via a BasicMaterial.
+    parts.lightring.traverse((o) => {
+      if (o.isMesh) o.material.color.set(color);
+    });
   }
+  // Per-LED control isn't possible without a custom shader (the mesh is a
+  // single ring), so for now setLed(i, ...) tints the whole ring too.
+  // Preserved as part of the API so shim code can stay forward-compatible.
+  function setLed(_i, color) { setAllLeds(color); }
 
-  function setFaceColor(color) {
-    FACE_MAT.color.set(color);
-  }
+  function setFaceColor(_color) { /* no-op: screen replaces this in M2 */ }
 
   function reset() {
     setYaw(0); setPitch(0); setRoll(0);
-    setAllLeds(0x202830);
+    setAllLeds(0x4ec9ff);
   }
 
-  reset();
+  const ready = loadModel(groups, parts).then(() => reset());
 
   return {
     root,
-    ledCount: LED_COUNT,
+    ready,
+    ledCount: 1,               // single tintable ring for now
     setYaw, setPitch, setRoll,
     setLed, setAllLeds,
     setFaceColor,
     reset
   };
+}
+
+async function loadModel(groups, parts) {
+  const mtlLoader = new MTLLoader().setPath(MODEL_DIR);
+  const materials = await new Promise((resolve, reject) => {
+    mtlLoader.load(MTL_FILE, resolve, undefined, reject);
+  });
+  materials.preload();
+
+  await Promise.all(PARTS.map(async (p) => {
+    const objLoader = new OBJLoader().setMaterials(materials).setPath(MODEL_DIR);
+    const obj = await new Promise((resolve, reject) => {
+      objLoader.load(p.file, resolve, undefined, reject);
+    });
+
+    obj.position.y = -p.pivot;
+
+    // Role-specific tweaks.
+    if (p.role === 'lightring') {
+      // Replace the lit Phong material with a Basic material so the ring
+      // glows independent of scene lighting and is cheap to recolor.
+      obj.traverse((o) => {
+        if (o.isMesh) {
+          o.material = new THREE.MeshBasicMaterial({ color: 0x4ec9ff });
+        }
+      });
+      parts.lightring = obj;
+    } else if (p.role === 'screen') {
+      // Make the screen plane distinctly visible until M2 hangs an iframe
+      // over it. Bright cyan placeholder, double-sided so we can see it
+      // from behind during dev.
+      obj.traverse((o) => {
+        if (o.isMesh) {
+          o.material = new THREE.MeshBasicMaterial({
+            color: 0x1f2630, side: THREE.DoubleSide
+          });
+        }
+      });
+      parts.screen = obj;
+    }
+
+    groups[p.attach].add(obj);
+  }));
 }

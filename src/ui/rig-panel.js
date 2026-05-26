@@ -42,12 +42,13 @@ export function installRigPanel(panelEl, rig) {
   panelEl.appendChild(jointsSection);
 
   // LED color picker
+  const segLabel = rig.ledCount > 1 ? ` (${rig.ledCount} segments)` : '';
   const ledSection = document.createElement('section');
   ledSection.className = 'rig-section';
   ledSection.innerHTML = `
-    <h3>LED ring (${rig.ledCount} segments)</h3>
+    <h3>LED ring${segLabel}</h3>
     <div class="rig-row">
-      <label for="rig-led-color">All</label>
+      <label for="rig-led-color">Color</label>
       <input type="color" id="rig-led-color" value="#4ec9ff">
       <button type="button" id="rig-led-off">Off</button>
     </div>
@@ -66,7 +67,7 @@ export function installRigPanel(panelEl, rig) {
   });
   ledSection.querySelector('#rig-led-off').addEventListener('click', () => {
     stopAnimations();
-    rig.setAllLeds(0x202830);
+    rig.setAllLeds(0x101418);
   });
   ledSection.querySelector('#rig-led-rainbow').addEventListener('click', () => {
     startRainbow();

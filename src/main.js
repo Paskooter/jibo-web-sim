@@ -17,4 +17,10 @@ resetBtn.addEventListener('click', () => viewport.resetView());
 installTabs(document.getElementById('tabs'), panelsEl);
 installRigPanel(panelsEl.querySelector('[data-panel="rig"]'), viewport.rig);
 
-statusEl.textContent = `M1 · three.js r${viewport.threeRevision} · ready`;
+statusEl.textContent = `M1 · three.js r${viewport.threeRevision} · loading model…`;
+viewport.rig.ready
+  .then(() => { statusEl.textContent = `M1 · three.js r${viewport.threeRevision} · ready`; })
+  .catch((err) => {
+    console.error('Jibo model load failed:', err);
+    statusEl.textContent = `M1 · three.js r${viewport.threeRevision} · model load FAILED — see console`;
+  });
