@@ -97,6 +97,12 @@ export function installJiboShim() {
     },
   };
 
+  // Recognized speech arrives as 'asr' 'speech' events from the host.
+  const asr = {
+    on: (event, fn) => on('asr', event, fn),
+    off: (event, fn) => off('asr', event, fn),
+  };
+
   // The face/eye renders locally in this iframe (no bridge round-trip needed).
   const face = {
     get eye() { return eye; },
@@ -126,6 +132,7 @@ export function installJiboShim() {
     init,
     tts,
     nlu,
+    asr,
     face,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
