@@ -65,7 +65,11 @@ export function createRequire(jibo) {
     return resolveFile(`${base}/index`);
   }
   function resolve(request, fromDir) {
-    if (request[0] === '.' || request[0] === '/') {
+    if (request[0] === '/') {                       // absolute path
+      const base = join('/', request);
+      return resolveFile(base) || resolveDir(base);
+    }
+    if (request[0] === '.') {                        // relative to the requirer
       const base = join(fromDir, request);
       return resolveFile(base) || resolveDir(base);
     }
@@ -189,6 +193,7 @@ function makeBuiltins() {
     http: { request: () => ({ on() { return this; }, end() {}, write() {} }), get: () => ({ on() { return this; } }) },
     https: { request: () => ({ on() { return this; }, end() {}, write() {} }), get: () => ({ on() { return this; } }) },
     net: {}, tls: {}, dns: {}, dgram: {}, zlib: {}, tty: { isatty: () => false }, vm: {},
+    domain: { create: () => ({ run: (f) => f(), on() {}, add() {}, enter() {}, exit() {}, dispose() {} }) },
     child_process: {}, cluster: {}, readline: {}, timers: { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: (f) => setTimeout(f, 0) },
     constants: {}, module: { Module: {} },
   };

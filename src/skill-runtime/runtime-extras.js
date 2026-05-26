@@ -25,7 +25,8 @@ export function createTimer() {
   };
 }
 
-// jibo.utils — DelayedCall (cancellable timeout, seconds) + PathUtils.
+// jibo.utils — DelayedCall + a skill-root-aware PathUtils + tolerant access for
+// the many sub-utilities original bundles reach for (LocationUtils, Timezone…).
 export function createUtils() {
   class DelayedCall {
     constructor(fn, seconds) { this._fn = fn; this._id = setTimeout(() => { this._id = null; fn(); }, (seconds || 0) * 1000); }
@@ -33,12 +34,41 @@ export function createUtils() {
     reset(seconds) { this.cancel(); this._id = setTimeout(this._fn, (seconds || 0) * 1000); }
     get pending() { return this._id != null; }
   }
+  const join = (...parts) => `/${parts.filter(Boolean).join('/').replace(/\/{2,}/g, '/').replace(/^\//, '')}`;
   const PathUtils = {
-    join(...parts) { return parts.filter(Boolean).join('/').replace(/\/{2,}/g, '/'); },
-    resolve(p) { return p; },
-    basename(p) { return String(p).split('/').pop(); },
+    _root: '/',
+    setRoot(r) { this._root = String(r).replace(/\/$/, '') || '/'; },
+    findRoot() { return this._root; },
+    // Resolve a module id (e.g. '@be/clock') to its entry path, or a relative
+    // path against the skill root — used by bundles to derive asset roots.
+    resolve(p) {
+      if (p && (p[0] === '.' || p[0] === '/')) return join(this._root, p);
+      return join(this._root, 'node_modules', p, 'index.js');
+    },
+    join: (...parts) => parts.filter(Boolean).join('/').replace(/\/{2,}/g, '/'),
+    dirname: (p) => String(p).replace(/\/[^/]*$/, '') || '/',
+    basename: (p) => String(p).split('/').pop(),
+    extname: (p) => { const m = /\.[^./]+$/.exec(String(p)); return m ? m[0] : ''; },
   };
-  return { DelayedCall, PathUtils };
+  const LocationUtils = { setLocationLookupKey() {}, setCapitalLookupKey() {}, getLocation: (cb) => cb && cb(null, {}) };
+  const Timezone = { setLocationLookupKey() {}, get: (cb) => cb && cb(null, 'UTC') };
+  const real = { DelayedCall, PathUtils, LocationUtils, Timezone };
+  // Tolerant: unknown utilities return a chainable no-op rather than crashing.
+  return new Proxy(real, {
+    get(t, p) {
+      if (p in t || typeof p === 'symbol') return Reflect.get(t, p);
+      return tolerantStub();
+    },
+  });
+}
+
+function tolerantStub() {
+  const fn = function () {};
+  return new Proxy(fn, {
+    get(t, p) { if (p === 'then') return undefined; if (typeof p === 'symbol') return () => ''; return p in t ? t[p] : tolerantStub(); },
+    apply() { return undefined; },
+    construct() { return {}; },
+  });
 }
 
 // jibo.loader — asset loader. Sounds register with jibo.sound; JSON-ish assets

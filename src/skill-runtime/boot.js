@@ -18,6 +18,9 @@ const params = new URLSearchParams(location.search);
 const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
 const entry = params.get('entry') || 'index.html';
 
+// Tell PathUtils where this bundle lives (findRoot/resolve + asset roots).
+if (jibo.utils && jibo.utils.PathUtils && jibo.utils.PathUtils.setRoot) jibo.utils.PathUtils.setRoot(dir);
+
 // CommonJS environment for the bundle.
 window.require = createRequire(jibo)(dir);
 window.module = { exports: {} };

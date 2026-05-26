@@ -21,7 +21,10 @@ app.use((req, res, next) => {
 // (e.g. the original jibo-be), kept OUT of the repo. Point EXTERNAL_SKILLS at a
 // directory of unpacked bundles; defaults to /tmp.
 const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
-app.use('/external-skills', express.static(EXTERNAL_SKILLS, { extensions: ['html'] }));
+// No `extensions` fallback here: the CommonJS require shim probes extensionless
+// paths (e.g. `index`) and must get a 404 — not index.html — so it can fall
+// through to `index.js`.
+app.use('/external-skills', express.static(EXTERNAL_SKILLS));
 
 app.use(express.static(__dirname, { extensions: ['html'] }));
 

@@ -378,18 +378,21 @@ export function installJiboShim() {
     version: '0.0.0-websim',
   };
 
-  // Behavior trees + flows run client-side; their leaves call the services above.
+  // Behavior trees + flows run client-side; their leaves call the services above
+  // (built on the real `jibo`, not the tolerant proxy below).
   jibo.bt = createBt(jibo);
   jibo.flow = createFlow(jibo);
 
-  // Runtime namespaces the web sim doesn't implement (mostly be-framework /
-  // privileged surfaces used by system bundles). Tolerant stubs so bundles load.
-  for (const ns of ['debug', 'action', 'embodied', 'expression', 'skills', 'globalEvents',
-    'systemManager', 'performance', 'errors', 'secureTransferService', 'gl', 'rendering', 'animUtils']) {
-    if (!(ns in jibo)) jibo[ns] = tolerantStub();
-  }
-
   // Announce readiness so the host flushes any queued events to us.
   parent.postMessage({ __jibo: true, kind: 'hello' }, '*');
-  return jibo;
+
+  // Hand skills a tolerant view: implemented members are real; any other
+  // namespace an original bundle reaches for (jibo.action, jibo.embodied,
+  // jibo.expression, jibo.gl, …) becomes a chainable no-op instead of crashing.
+  return new Proxy(jibo, {
+    get(t, p) {
+      if (p in t || typeof p === 'symbol') return Reflect.get(t, p);
+      return tolerantStub();
+    },
+  });
 }
