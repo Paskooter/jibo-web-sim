@@ -113,3 +113,10 @@ body {
 .rig-actions button:hover { border-color: var(--accent); }
 .rig-actions { display: flex; }
 .rig-actions button { flex: 1; padding: 8px; }
+.rig-note {
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: -4px 0 10px 0;
+}
+.rig-row output { min-width: 120px; }
