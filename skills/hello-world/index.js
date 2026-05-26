@@ -19,6 +19,7 @@ var CHAT_RULE = {
     beep: ['beep', 'make a sound', 'play a sound'],
     notify: ['notify me', 'remind me', 'send a notification'],
     photo: ['take a photo', 'take a picture', 'say cheese'],
+    routine: ['do a routine', 'do your thing', 'run a behavior tree'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -38,6 +39,21 @@ var RESPONSES = {
 function sayWithGesture(text, gesture, done) {
   if (gesture) jibo.animate.play(gesture);
   jibo.tts.speak(text, done);
+}
+
+// A small behavior tree: a Sequence of Say -> animate -> look -> blink -> Say.
+function runRoutine() {
+  var B = jibo.bt.behaviors;
+  var tree = new B.Sequence({ children: [
+    new B.TextToSpeech({ words: 'Watch me run a behavior tree!' }),
+    new B.PlayAnimation({ animPath: 'lookAround' }),
+    new B.LookAt({ getTarget: function () { return { x: 0.1, y: 0.4, z: 0.6 }; } }),
+    new B.Blink({}),
+    new B.TextToSpeech({ words: 'Sequence complete!' }),
+  ] });
+  jibo.bt.run(tree, {}, function () {
+    jibo.face.lookForward();
+  });
 }
 
 jibo.init('face', function (err) {
@@ -78,6 +94,8 @@ jibo.init('face', function (err) {
           type: 'message', title: 'Reminder', description: 'You asked me to remind you!',
         });
         sayWithGesture("Okay, I've sent you a notification.", 'nodYes');
+      } else if (intent && score >= 0.5 && intent === 'routine') {
+        runRoutine();
       } else if (intent && score >= 0.5 && intent === 'photo') {
         jibo.tts.speak('Say cheese!', function () {
           jibo.lps.takePhoto(null, true, jibo.lps.CameraID.LEFT, jibo.lps.PhotoType.FULL, function (err) {

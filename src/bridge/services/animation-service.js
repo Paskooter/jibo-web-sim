@@ -11,7 +11,7 @@ import { evaluate, BUILTINS, fromLegacy } from '../../anim/animation.js';
 
 const RING_REST = [0.31, 0.79, 1.0];   // #4ec9ff
 
-export function createAnimationService({ rig, emitFace, loadAnim }) {
+export function createAnimationService({ rig, emitFace, loadAnim, setLookTarget }) {
   let raf = 0;
   let token = 0;
   let activeResolve = null;
@@ -91,5 +91,12 @@ export function createAnimationService({ rig, emitFace, loadAnim }) {
     return activeResolve !== null;
   }
 
-  return { play, stop, setLEDColor, blink, isActive };
+  // jibo.animate.lookAt — point Jibo at a world target (drives the look-at
+  // controller via the host), resolving once the look has had time to settle.
+  function lookAt(point) {
+    if (setLookTarget) setLookTarget(point);
+    return new Promise((resolve) => setTimeout(resolve, 1300));
+  }
+
+  return { play, stop, setLEDColor, blink, isActive, lookAt };
 }

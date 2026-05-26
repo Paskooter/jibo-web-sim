@@ -161,6 +161,7 @@ async function startSkillRuntime() {
     rig: viewport.rig,
     emitFace: (event, data) => bridge.emit('face', event, data),
     loadAnim: (uri) => fetch(`/assets/jibo-legacy/${uri}`).then((r) => r.json()),
+    setLookTarget: (point) => setActiveTarget(point),   // jibo.animate.lookAt
   });
   bridge.register('animate', animation);
 

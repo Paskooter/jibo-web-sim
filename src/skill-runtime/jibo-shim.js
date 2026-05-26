@@ -14,6 +14,7 @@
 
 import { createEye } from './face-eye.js';
 import { createSound } from './sound.js';
+import { createBt } from './bt.js';
 
 let nextId = 1;
 const pendingCalls = new Map();          // id -> { resolve, reject }
@@ -231,6 +232,26 @@ export function installJiboShim() {
     },
     setLEDColor(r, g, b) { rawCall('animate', 'setLEDColor', [r, g, b]); },
     blink() { if (eye) eye.blink(); },
+    // Point Jibo at a world target; resolves/cb when the look settles.
+    lookAt(point, options, cb) {
+      if (typeof options === 'function') { cb = options; options = undefined; }
+      const p = rawCall('animate', 'lookAt', [point]);
+      if (cb) { p.then(() => cb(), (e) => cb(e)); return; }
+      return p;
+    },
+    // Spec-shaped look-at builder (jibo.animate.createLookatBuilder()).
+    createLookatBuilder() {
+      const handlers = {};
+      const fire = (ev) => (handlers[ev] || []).forEach((f) => f());
+      return {
+        setContinuousMode() { return this; },
+        startLookat(vec) {
+          rawCall('animate', 'lookAt', [vec]).then(() => { fire('TARGET_REACHED'); fire('STOPPED'); });
+          return { updateTarget: (v) => rawCall('animate', 'lookAt', [v]), stop() {} };
+        },
+        on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return this; },
+      };
+    },
   };
 
   function resolveDisplay(arg) {
@@ -265,6 +286,9 @@ export function installJiboShim() {
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',
   };
+
+  // Behavior trees run client-side; their leaves call the services above.
+  jibo.bt = createBt(jibo);
 
   // Announce readiness so the host flushes any queued events to us.
   parent.postMessage({ __jibo: true, kind: 'hello' }, '*');
