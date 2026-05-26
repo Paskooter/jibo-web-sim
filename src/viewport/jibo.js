@@ -1,33 +1,40 @@
-// Articulated Jibo rig — procedural geometry.
+// Articulated Jibo rig — uses the legacy .geom + .skel + .kin source data.
 //
-// Built from the canonical Jibo skeleton + kinematics in
-// `sdk-archive/animation-utilities/res/geometry-config/P1.0/`
-// (`jibo_body.skel`, `jibo_body.kin`).
-//
-// Three DOFs, all rotations about the joint's local +Y axis:
+// We load `jibo_body.geom` directly (the same JSON the original animation-
+// utilities Jibo simulator loads via ArticulatedModelLoader/ModelLoader).
+// Each mesh in the .geom carries an explicit `skeletonFrameName` pointing
+// at a bone in `jibo_body.skel`; we mount the meshes into matching
+// THREE.Group "bones" and articulate the chain via the three canonical
+// DOFs from `jibo_body.kin`:
 //
 //   bottomSection_r  — child of rootBn
 //   middleSection_r  — child of bottomSection
 //   topSection_r     — child of middleSection
 //
-// The "look anywhere in 3D" capability comes from the *tilted rest-pose
-// quaternions* on middleSection (+~13° about X) and topSection (-~22° about X).
-// The three local-Y rotations are not parallel in world space, so the three
+// All three DOFs rotate about the joint's local +Y axis. The middle and
+// top joints have tilted rest-pose quaternions (~+13° and ~-22° about X),
+// so the three local-Y rotations aren't parallel in world space — the
 // motors couple to swing the head through 3D space.
 //
-// Geometry is procedural: a base, a pelvis bell, an LED ring, a tapered
-// torso, and a head sphere with a flat angled face plate. Sized so each
-// section's top meets the next joint's translation point from the skel.
-// (Earlier attempts loaded the MIT mitmedialab/Jibo_Models OBJ set, but
-// the head OBJ has 5 disconnected components — outer shell plus internal
-// camera mounts and screen housing — which poked through the silhouette
-// when rendered naively.)
+// Legacy renderer uses `defaultMaterial.side = DoubleSide`
+// (see sdk-archive/animation-utilities/src/animation-visualize/JiboBody.js).
+// The .geom loader mirrors that, which is essential for the head shell
+// to read correctly through its face cutout.
 
 import * as THREE from 'three';
+import { loadGeom } from './geom-loader.js';
 
-// ---- Skeleton transforms (from jibo_body.skel) ----------------------------
-// Quaternions stored as (w, x, y, z); Three.js wants (x, y, z, w), so swap.
+const LEGACY_DIR = 'assets/jibo-legacy/';
+const GEOM_FILE  = LEGACY_DIR + 'jibo_body.geom';
 
+// From jibo_body.skel. The full skeleton has nodes for each mesh
+// (baseMesh, pelvisMesh, ...) hanging off these joint frames with
+// identity transforms — but the .geom vertices are baked in world rest
+// coords, so we attach each mesh to its joint via Object3D.attach()
+// instead of using the mesh-level skel nodes.
+//
+// Quaternions stored (w, x, y, z); Three.js wants (x, y, z, w), swap on
+// construction.
 const SKELETON = {
   bottomSection: {
     parent: 'root',
@@ -48,140 +55,30 @@ const SKELETON = {
 
 const DOF_AXIS = new THREE.Vector3(0, 1, 0);
 
-// ---- Geometry parameters --------------------------------------------------
-// All sizes are in meters. The Y-extent of each section ends where the
-// next joint's translation starts, so the segments meet at the skel-
-// defined seams.
-
-const BASE_RADIUS_TOP    = 0.090;
-const BASE_RADIUS_BOTTOM = 0.105;
-const BASE_HEIGHT        = 0.020;
-
-const PELVIS_BOTTOM_R    = 0.095;
-const PELVIS_TOP_R       = 0.085;
-const PELVIS_HEIGHT      = 0.046;     // matches middleSection.translation.y
-
-const LED_RING_RADIUS    = 0.094;
-const LED_RING_TUBE      = 0.0055;
-const LED_RING_Y         = 0.014;
-
-const TORSO_BOTTOM_R     = 0.082;
-const TORSO_TOP_R        = 0.072;
-const TORSO_HEIGHT       = 0.086;     // matches topSection.translation.y
-
-const HEAD_RADIUS        = 0.090;
-const HEAD_CENTER_Y      = 0.025;
-
-const FACE_W             = 0.130;
-const FACE_H             = 0.090;
-const FACE_OFFSET_Z      = -0.080;
-const FACE_OFFSET_Y      = 0.020;
-const FACE_TILT_DEG      = -8;
-
-const SCREEN_W           = 0.105;
-const SCREEN_H           = 0.062;
-const SCREEN_OFFSET_Z    = -0.0805;
-const SCREEN_OFFSET_Y    = 0.015;
-
-const BODY_COLOR         = 0xe8eaed;
-const FACE_COLOR         = 0x05070a;
-const SCREEN_COLOR       = 0x12161c;
-
-// ---- Materials ------------------------------------------------------------
-
-function bodyMat() {
-  return new THREE.MeshStandardMaterial({
-    color: BODY_COLOR, roughness: 0.55, metalness: 0.05
-  });
-}
-
-// ---- Helpers --------------------------------------------------------------
+// Map each .geom skeletonFrameName onto one of the four joint groups
+// we care about for articulation. (The full skel has per-mesh nodes
+// like "baseMesh", "pelvisMesh", etc., but those are identity inside
+// their parent joint, so we collapse them.)
+const MESH_TO_JOINT = {
+  baseMesh:     'root',
+  pelvisMesh:   'bottomSection',
+  lightringMesh:'bottomSection',
+  torsoMesh:    'middleSection',
+  headMesh:     'topSection',
+  maskMesh:     'topSection',
+  screenMesh:   'topSection',
+};
 
 function quatFromWXYZ([w, x, y, z]) {
   return new THREE.Quaternion(x, y, z, w);
 }
-
-function makeBaseDisc() {
-  const g = new THREE.CylinderGeometry(
-    BASE_RADIUS_TOP, BASE_RADIUS_BOTTOM, BASE_HEIGHT, 96
-  );
-  const m = new THREE.Mesh(g, bodyMat());
-  m.position.y = -BASE_HEIGHT / 2;
-  return m;
-}
-
-function makePelvis() {
-  // Slightly bell-shaped: widest a hair below mid-height, narrower at top.
-  const g = new THREE.CylinderGeometry(
-    PELVIS_TOP_R, PELVIS_BOTTOM_R, PELVIS_HEIGHT, 96
-  );
-  const m = new THREE.Mesh(g, bodyMat());
-  m.position.y = PELVIS_HEIGHT / 2;
-  return m;
-}
-
-function makeLedRing() {
-  const g = new THREE.TorusGeometry(LED_RING_RADIUS, LED_RING_TUBE, 16, 96);
-  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x4ec9ff }));
-  m.position.y = LED_RING_Y;
-  m.rotation.x = Math.PI / 2;
-  return m;
-}
-
-function makeTorso() {
-  const g = new THREE.CylinderGeometry(
-    TORSO_TOP_R, TORSO_BOTTOM_R, TORSO_HEIGHT, 96
-  );
-  const m = new THREE.Mesh(g, bodyMat());
-  m.position.y = TORSO_HEIGHT / 2;
-  return m;
-}
-
-function makeHead() {
-  const group = new THREE.Group();
-
-  const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(HEAD_RADIUS, 64, 48),
-    bodyMat()
-  );
-  sphere.position.y = HEAD_CENTER_Y;
-  group.add(sphere);
-
-  // Face plate: dark glossy panel that hides the front of the head sphere
-  // and gives Jibo his characteristic face.
-  const facePlate = new THREE.Mesh(
-    new THREE.BoxGeometry(FACE_W, FACE_H, 0.004),
-    new THREE.MeshStandardMaterial({
-      color: FACE_COLOR, roughness: 0.18, metalness: 0.3
-    })
-  );
-  facePlate.position.set(0, HEAD_CENTER_Y + FACE_OFFSET_Y, FACE_OFFSET_Z);
-  facePlate.rotation.x = THREE.MathUtils.degToRad(FACE_TILT_DEG);
-  group.add(facePlate);
-
-  // Screen (a slightly inset plane on the face). M2 will replace this
-  // with an iframe overlay carrying the skill UI.
-  const screen = new THREE.Mesh(
-    new THREE.PlaneGeometry(SCREEN_W, SCREEN_H),
-    new THREE.MeshBasicMaterial({ color: SCREEN_COLOR, side: THREE.DoubleSide })
-  );
-  screen.position.set(0, HEAD_CENTER_Y + SCREEN_OFFSET_Y, SCREEN_OFFSET_Z);
-  screen.rotation.x = THREE.MathUtils.degToRad(FACE_TILT_DEG);
-  screen.name = 'screen';
-  group.add(screen);
-
-  return { group, screen };
-}
-
-// ---- Public API -----------------------------------------------------------
 
 export function createJiboRig(scene) {
   const root = new THREE.Group();
   root.name = 'jibo';
   scene.add(root);
 
-  // Joint groups, posed at rest. Each is initialized with its rest-pose
-  // quaternion; articulating composes the DOF Y-axis rotation on top.
+  // Build the joint tree, posed at rest.
   const joints = { root };
   const restQuats = {};
   for (const [name, spec] of Object.entries(SKELETON)) {
@@ -194,21 +91,8 @@ export function createJiboRig(scene) {
     joints[name] = g;
   }
 
-  // Geometry attached to joints. Base is fixed in root; everything else
-  // hangs off the kinematic chain.
-  joints.root.add(makeBaseDisc());
-
-  joints.bottomSection.add(makePelvis());
-  const ledMesh = makeLedRing();
-  joints.bottomSection.add(ledMesh);
-
-  joints.middleSection.add(makeTorso());
-
-  const { group: headGroup, screen: screenMesh } =
-    makeHead();
-  joints.topSection.add(headGroup);
-
-  // --- API ---
+  // Refs we want after the model load completes.
+  const parts = { lightring: null, screen: null, byName: {} };
 
   function setDof(name, rad) {
     const dof = new THREE.Quaternion().setFromAxisAngle(DOF_AXIS, rad);
@@ -218,27 +102,74 @@ export function createJiboRig(scene) {
   function setMiddle(rad) { setDof('middleSection', rad); }
   function setTop(rad)    { setDof('topSection',    rad); }
 
-  function setLEDHex(hex) { ledMesh.material.color.set(hex); }
+  function setLEDHex(hex) {
+    if (!parts.lightring) return;
+    // The lightring's diffuse is black in the source material; the LED
+    // color is driven by emissive (and ambient, so we get the color even
+    // with low scene lighting).
+    parts.lightring.material.emissive.set(hex);
+    parts.lightring.material.color.set(hex);
+  }
   function setLEDColor(r, g, b) {
     setLEDHex((Math.round(r * 255) << 16) |
               (Math.round(g * 255) << 8)  |
                Math.round(b * 255));
   }
 
+  function setScreenHex(hex) {
+    if (!parts.screen) return;
+    parts.screen.material.emissive.set(hex);
+    parts.screen.material.color.set(hex);
+  }
+
   function reset() {
     setBottom(0); setMiddle(0); setTop(0);
     setLEDHex(0x4ec9ff);
+    setScreenHex(0x12161c);
   }
-  reset();
+
+  const ready = loadGeom(GEOM_FILE, LEGACY_DIR).then((meshes) => {
+    for (const { name, skeletonFrameName, mesh, material } of meshes) {
+      const jointName = MESH_TO_JOINT[skeletonFrameName] ?? 'root';
+
+      // Per-mesh material tweaks.
+      if (name === 'lightringMeshMesh') {
+        // The .geom's lightringMaterial is all-zero (it's meant to be driven
+        // by the three LED color DOFs). Initialize to a visible cyan; the
+        // setLEDHex API takes over after that.
+        material.emissive.set(0x4ec9ff);
+        material.color.set(0x4ec9ff);
+        parts.lightring = mesh;
+      } else if (name === 'screenMeshBillboardMesh') {
+        // Source material has emissive (1,1,1) and no diffuse — meant to
+        // display a render-target texture in the legacy sim. Start with a
+        // dark panel; M2 will swap in an iframe-driven texture.
+        material.map = null;
+        material.emissive.set(0x12161c);
+        material.color.set(0x12161c);
+        parts.screen = mesh;
+      }
+
+      parts.byName[name] = mesh;
+      // The .geom vertices are baked in world rest coords. Add to scene
+      // first, then attach() into the joint group — attach preserves the
+      // world transform, computing the local transform automatically so
+      // articulation works correctly.
+      scene.add(mesh);
+      joints[jointName].attach(mesh);
+    }
+    reset();
+  });
 
   return {
     root,
-    ready: Promise.resolve(),
+    ready,
     dofs: ['bottomSection_r', 'middleSection_r', 'topSection_r'],
     dofMin: -3.0543, dofMax: 3.0543, dofCyclic: true,
     setBottom, setMiddle, setTop, setDof,
     setLEDColor, setLEDHex,
-    screen: screenMesh,
+    setScreenHex,
+    parts,
     reset,
   };
 }
