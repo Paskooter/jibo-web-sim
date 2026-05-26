@@ -21,6 +21,14 @@ export function createRequire(jibo) {
   const textCache = {};        // url -> string | null
   const builtins = makeBuiltins();
 
+  // Overrides for node modules that can't run in the browser (filesystem/native
+  // tricks) — replaced with tolerant stubs so their dependents still construct.
+  const overrides = {
+    'graceful-fs': builtins.fs,
+    'jibo-tunable': tolerantStub(),
+    'fs-extra': builtins.fs,
+  };
+
   function fetchTextSync(url) {
     if (url in textCache) return textCache[url];
     let text = null;
@@ -86,6 +94,7 @@ export function createRequire(jibo) {
   function requireFrom(fromDir) {
     return function require(request) {
       if (request === 'jibo') return jibo;
+      if (request in overrides) return overrides[request];
       if (builtins[request]) return builtins[request];
 
       const url = resolve(request, fromDir);
@@ -115,17 +124,27 @@ export function createRequire(jibo) {
   return requireFrom;
 }
 
+function tolerantStub() {
+  const fn = function () {};
+  return new Proxy(fn, {
+    get(t, p) { if (p === 'then') return undefined; if (typeof p === 'symbol') return () => ''; return p in t ? t[p] : tolerantStub(); },
+    apply() { return undefined; },
+    construct() { return {}; },
+  });
+}
+
 function makeBuiltins() {
-  class EventEmitter {
-    constructor() { this._e = {}; }
-    on(t, f) { (this._e[t] = this._e[t] || []).push(f); return this; }
-    once(t, f) { const g = (...a) => { this.removeListener(t, g); f(...a); }; return this.on(t, g); }
-    addListener(t, f) { return this.on(t, f); }
-    removeListener(t, f) { const a = this._e[t]; if (a) { const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); } return this; }
-    removeAllListeners(t) { if (t) delete this._e[t]; else this._e = {}; return this; }
-    emit(t, ...a) { (this._e[t] || []).slice().forEach((f) => f(...a)); return (this._e[t] || []).length > 0; }
-    listeners(t) { return (this._e[t] || []).slice(); }
-  }
+  // Function-style so it works as both `new EventEmitter()` and the legacy
+  // `EventEmitter.call(this)` (pixi.js / node 'events' style).
+  function EventEmitter() { if (!this._e) this._e = {}; }
+  EventEmitter.prototype.on = function (t, f) { (this._e || (this._e = {})); (this._e[t] = this._e[t] || []).push(f); return this; };
+  EventEmitter.prototype.once = function (t, f) { const g = (...a) => { this.removeListener(t, g); f(...a); }; return this.on(t, g); };
+  EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+  EventEmitter.prototype.removeListener = function (t, f) { const a = this._e && this._e[t]; if (a) { const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); } return this; };
+  EventEmitter.prototype.removeAllListeners = function (t) { if (t) { if (this._e) delete this._e[t]; } else this._e = {}; return this; };
+  EventEmitter.prototype.emit = function (t, ...a) { const l = (this._e && this._e[t]) || []; l.slice().forEach((f) => f(...a)); return l.length > 0; };
+  EventEmitter.prototype.listeners = function (t) { return ((this._e && this._e[t]) || []).slice(); };
+  EventEmitter.EventEmitter = EventEmitter;
   // Minimal Node `stream` (jibo-log etc. extend Writable/Transform).
   class Writable extends EventEmitter {
     write(chunk, enc, cb) { this.emit('data', chunk); if (typeof enc === 'function') enc(); else if (cb) cb(); return true; }
@@ -171,8 +190,7 @@ function makeBuiltins() {
     version: 'v16.0.0', versions: { node: '16.0.0' },
   };
   return {
-    events: Object.assign(function () {}, { EventEmitter }),
-    eventemitter3: EventEmitter,
+    events: Object.assign(EventEmitter, { EventEmitter }),
     path,
     process,
     util: {

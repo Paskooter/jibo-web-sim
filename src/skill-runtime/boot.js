@@ -27,6 +27,13 @@ window.module = { exports: {} };
 window.exports = window.module.exports;
 window.global = window;
 window.Buffer = window.Buffer || window.require('buffer').Buffer;   // some deps use a global Buffer
+
+// Jibo bundles render with PixiJS and expect a global PIXI. If the bundle ships
+// pixi.js, expose it globally so pixi-animate / the GUI layer find it.
+try {
+  const PIXI = window.require('pixi.js');
+  if (PIXI && (PIXI.VERSION || PIXI.Application || PIXI.autoDetectRenderer)) window.PIXI = PIXI;
+} catch (_) { /* skill doesn't bundle pixi */ }
 window.process = window.process || {
   env: { NODE_ENV: 'production' }, platform: 'browser', argv: ['node', 'skill'],
   nextTick: (f, ...a) => Promise.resolve().then(() => f(...a)), cwd: () => '/', on() {},

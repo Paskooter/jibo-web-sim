@@ -32,7 +32,7 @@ function findChrome() {
 const browser = await puppeteer.launch({
   headless: true,
   executablePath: findChrome(),
-  args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+  args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage();
 const log = [];
