@@ -1,0 +1,4 @@
+// Launch rule (NLU/FST grammar). On a robot, matching this phrase launches the
+// skill; the web sim doesn't run an FST parser yet, so it surfaces the
+// manifest's `prompt` instead and keeps the skill always-running.
+TopRule = ($* (hey jibo | hello jibo | start hello world) {skill='hello-world'} $*);

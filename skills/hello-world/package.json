@@ -1,0 +1,14 @@
+{
+  "name": "hello-world",
+  "version": "0.1.0",
+  "description": "A hand-written Hello World skill for the Jibo web simulator.",
+  "main": "index.js",
+  "jibo": {
+    "main": "index.html",
+    "type": "behavior",
+    "launchRule": "launch.rule",
+    "prompt": "Say hello to Jibo",
+    "display-name": "Hello World"
+  },
+  "license": "UNLICENSED"
+}

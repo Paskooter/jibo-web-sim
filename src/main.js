@@ -15,6 +15,9 @@ import { createTtsService } from './bridge/services/tts-service.js';
 import { createNluService } from './bridge/services/nlu-service.js';
 import { createAsrService } from './bridge/services/asr-service.js';
 import { createAnimationService } from './bridge/services/animation-service.js';
+import { loadSkillManifest } from './skill-runtime/skill-loader.js';
+
+const SKILL_DIR = '/skills/hello-world';
 
 const viewportEl = document.getElementById('viewport');
 const statusEl = document.getElementById('status');
@@ -40,16 +43,16 @@ function setSubtitle(text) {
   else { subtitleEl.hidden = true; }
 }
 
-statusEl.textContent = `M2 · three.js r${viewport.threeRevision} · loading model…`;
+statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · loading model…`;
 
 viewport.rig.ready
   .then(() => {
-    statusEl.textContent = `M2 · three.js r${viewport.threeRevision} · ready`;
+    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · click Start`;
     showStartGate();
   })
   .catch((err) => {
     console.error('Jibo model load failed:', err);
-    statusEl.textContent = `M2 · three.js r${viewport.threeRevision} · model load FAILED — see console`;
+    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · model load FAILED — see console`;
   });
 
 // A "power-on" gate: browsers block audio until the user interacts with the
@@ -67,7 +70,7 @@ function showStartGate() {
   viewportEl.appendChild(gate);
 }
 
-function startSkillRuntime() {
+async function startSkillRuntime() {
   const screenMesh = viewport.rig.parts.screen;
   if (!screenMesh) {
     console.error('skill runtime: no screen mesh on the rig; cannot mount face');
@@ -119,5 +122,16 @@ function startSkillRuntime() {
   });
   viewport.onFrame(overlay.update);
 
-  iframe.src = '/skill-host.html';
+  // Discover + load the skill from its manifest, then point the iframe at the
+  // bundle's entry (its own index.html).
+  try {
+    const skill = await loadSkillManifest(SKILL_DIR);
+    statusEl.textContent =
+      `M5 · ${skill.name} v${skill.version} · three.js r${viewport.threeRevision}`;
+    if (skill.prompt) chat.setPlaceholder(`${skill.prompt}…`);
+    iframe.src = skill.entry;
+  } catch (err) {
+    console.error('skill load failed:', err);
+    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · skill load FAILED — see console`;
+  }
 }

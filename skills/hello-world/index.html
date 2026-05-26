@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hello World — Jibo skill</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    body { width: 1280px; height: 720px; }
+    #face { width: 1280px; height: 720px; }
+  </style>
+</head>
+<body>
+  <!-- jibo.init('face', …) renders the eye into this element. -->
+  <div id="face"></div>
+  <!-- This bundle's entry per package.json's jibo.main. On a real robot the
+       jibo runtime is browserified into the skill bundle; here the platform
+       serves it, and boot.js installs it as the `jibo` global before loading
+       this bundle's entry script (index.js). -->
+  <script type="module" src="/src/skill-runtime/boot.js"></script>
+</body>
+</html>

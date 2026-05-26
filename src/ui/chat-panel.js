@@ -49,8 +49,8 @@ export function installChatPanel(panelEl) {
       sendHandler = fn;
       enabled = true;
       input.disabled = false;
-      input.placeholder = 'Say something to Jibo…';
     },
+    setPlaceholder: (text) => { if (text) input.placeholder = text; },
     addUserMessage: (text) => addMessage('user', text),
     addJiboMessage: (text) => addMessage('jibo', text),
   };
