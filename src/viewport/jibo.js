@@ -1,112 +1,99 @@
-// Articulated Jibo rig — uses the legacy .geom + .skel + .kin source data.
+// Articulated Jibo rig — a faithful re-implementation of the legacy
+// animation-utilities loader chain, driven by the original source data:
 //
-// We load `jibo_body.geom` directly (the same JSON the original animation-
-// utilities Jibo simulator loads via ArticulatedModelLoader/ModelLoader).
-// Each mesh in the .geom carries an explicit `skeletonFrameName` pointing
-// at a bone in `jibo_body.skel`; we mount the meshes into matching
-// THREE.Group "bones" and articulate the chain via the three canonical
-// DOFs from `jibo_body.kin`:
+//   jibo_body.geom  — meshes (vertices are FRAME-LOCAL, not world coords)
+//   jibo_body.skel  — the full skeleton frame tree
+//   jibo_body.kin   — the ROTATION controls (the 3 motor DOFs) + COLOR control
 //
-//   bottomSection_r  — child of rootBn
-//   middleSection_r  — child of bottomSection
-//   topSection_r     — child of middleSection
+// This mirrors, file-for-file, the original pipeline in
+// sdk-archive/animation-utilities:
+//   - SkeletonLoader._parseSkeleton  → buildSkeleton()
+//   - ArticulatedModelLoader._loadModel → mesh attach via plain .add()
+//   - RotationControl.updateFromDOFVal  → setDof()
+//   - JiboBody.load (defaultMaterial.side = DoubleSide) → geom-loader
 //
-// All three DOFs rotate about the joint's local +Y axis. The middle and
-// top joints have tilted rest-pose quaternions (~+13° and ~-22° about X),
-// so the three local-Y rotations aren't parallel in world space — the
-// motors couple to swing the head through 3D space.
+// Two details the earlier implementation got wrong (and why it looked
+// "crunched" with wrong motion):
 //
-// Legacy renderer uses `defaultMaterial.side = DoubleSide`
-// (see sdk-archive/animation-utilities/src/animation-visualize/JiboBody.js).
-// The .geom loader mirrors that, which is essential for the head shell
-// to read correctly through its face cutout.
+//  1. QUATERNION INVERSE. BasicFrame.quaternionFromJson parses each stored
+//     wxyz quaternion as THREE (x,y,z,w) and then *inverts* it ("switching
+//     from world-frame to body-frame convention"). Every rest orientation
+//     AND every DOF initial rotation goes through this. Skipping the invert
+//     mis-orients every joint.
+//
+//  2. FRAME-LOCAL VERTICES + plain .add(). The .geom vertices live in each
+//     mesh's skeleton-frame local space; the skeleton's frame transforms
+//     place them in the world. The original attaches each mesh to its named
+//     frame with parent.add(mesh) — NOT Object3D.attach() (which would treat
+//     the verts as world coords and collapse the whole model onto itself).
+//
+// The assembled skeleton is Z-up (matching the original renderer, which set
+// camera.up = (0,0,1) — see VisualizeImpl.js:421). Our scene is Y-up, so we
+// parent the model under a wrapper rotated -90° about X (body +Z → world +Y).
 
 import * as THREE from 'three';
 import { loadGeom } from './geom-loader.js';
 
 const LEGACY_DIR = 'assets/jibo-legacy/';
 const GEOM_FILE  = LEGACY_DIR + 'jibo_body.geom';
+const SKEL_FILE  = LEGACY_DIR + 'jibo_body.skel';
+const KIN_FILE   = LEGACY_DIR + 'jibo_body.kin';
 
-// From jibo_body.skel. The full skeleton has nodes for each mesh
-// (baseMesh, pelvisMesh, ...) hanging off these joint frames with
-// identity transforms — but the .geom vertices are baked in world rest
-// coords, so we attach each mesh to its joint via Object3D.attach()
-// instead of using the mesh-level skel nodes.
-//
-// Quaternions stored (w, x, y, z); Three.js wants (x, y, z, w), swap on
-// construction.
-const SKELETON = {
-  bottomSection: {
-    parent: 'root',
-    translation: [0, 0, 0],
-    restQuatWXYZ: [0, 0, 1, 0],                          // 180° about Y
-  },
-  middleSection: {
-    parent: 'bottomSection',
-    translation: [0, 0.045563820749521255, -0.0053259097039699554],
-    restQuatWXYZ: [0.9935718579377518, 0.11320319392192023, 0, 0],
-  },
-  topSection: {
-    parent: 'middleSection',
-    translation: [0, 0.08649425953626633, 0.016203919425606728],
-    restQuatWXYZ: [0.9821233481679139, -0.18823848964397946, 0, 0],
-  },
-};
-
-const DOF_AXIS = new THREE.Vector3(0, 1, 0);
-
-// Map each .geom skeletonFrameName onto one of the four joint groups
-// we care about for articulation. (The full skel has per-mesh nodes
-// like "baseMesh", "pelvisMesh", etc., but those are identity inside
-// their parent joint, so we collapse them.)
-const MESH_TO_JOINT = {
-  baseMesh:     'root',
-  pelvisMesh:   'bottomSection',
-  lightringMesh:'bottomSection',
-  torsoMesh:    'middleSection',
-  headMesh:     'topSection',
-  maskMesh:     'topSection',
-  screenMesh:   'topSection',
-};
-
+// BasicFrame.quaternionFromJson: stored as [w, x, y, z]; THREE wants
+// (x, y, z, w); then inverse() to go from world- to body-frame convention.
 function quatFromWXYZ([w, x, y, z]) {
-  return new THREE.Quaternion(x, y, z, w);
+  return new THREE.Quaternion(x, y, z, w).invert();
+}
+
+// SkeletonLoader._parseSkeleton: recursively build a tree of frames, each a
+// THREE.Group carrying the frame's rest position + (inverted) orientation.
+function buildSkeleton(node, frameMap) {
+  const obj = new THREE.Group();
+  obj.name = node.name;
+  obj.position.fromArray(node.xyzTranslation);
+  obj.quaternion.copy(quatFromWXYZ(node.wxyzRotation));
+  frameMap[node.name] = obj;
+  if (node.children) {
+    for (const child of node.children) obj.add(buildSkeleton(child, frameMap));
+  }
+  return obj;
+}
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status} ${url}`);
+  return res.json();
 }
 
 export function createJiboRig(scene) {
+  // Wrapper converts the Z-up skeleton into our Y-up scene.
   const root = new THREE.Group();
   root.name = 'jibo';
+  root.rotation.x = -Math.PI / 2;
   scene.add(root);
 
-  // Build the joint tree, posed at rest.
-  const joints = { root };
-  const restQuats = {};
-  for (const [name, spec] of Object.entries(SKELETON)) {
-    const g = new THREE.Group();
-    g.name = name;
-    g.position.fromArray(spec.translation);
-    restQuats[name] = quatFromWXYZ(spec.restQuatWXYZ);
-    g.quaternion.copy(restQuats[name]);
-    joints[spec.parent].add(g);
-    joints[name] = g;
-  }
-
-  // Refs we want after the model load completes.
+  // Refs resolved after load.
   const parts = { lightring: null, screen: null, byName: {} };
+  const frameMap = {};       // frame name -> THREE.Group
+  const controls = {};       // dofName -> { frame, axis, initialRotation }
+  let dofMin = -3.0543, dofMax = 3.0543, dofCyclic = true;
 
-  function setDof(name, rad) {
-    const dof = new THREE.Quaternion().setFromAxisAngle(DOF_AXIS, rad);
-    joints[name].quaternion.copy(restQuats[name]).multiply(dof);
+  // RotationControl.updateFromDOFVal:
+  //   frame.quaternion = initialRotation * quat(axis, dofValue)
+  function setDof(dofName, rad) {
+    const c = controls[dofName];
+    if (!c) return;
+    const spin = new THREE.Quaternion().setFromAxisAngle(c.axis, rad);
+    c.frame.quaternion.multiplyQuaternions(c.initialRotation, spin);
   }
-  function setBottom(rad) { setDof('bottomSection', rad); }
-  function setMiddle(rad) { setDof('middleSection', rad); }
-  function setTop(rad)    { setDof('topSection',    rad); }
+  const setBottom = (rad) => setDof('bottomSection_r', rad);
+  const setMiddle = (rad) => setDof('middleSection_r', rad);
+  const setTop    = (rad) => setDof('topSection_r',    rad);
 
   function setLEDHex(hex) {
     if (!parts.lightring) return;
-    // The lightring's diffuse is black in the source material; the LED
-    // color is driven by emissive (and ambient, so we get the color even
-    // with low scene lighting).
+    // Lightring diffuse is black in the source (driven by 3 LED color DOFs
+    // in the legacy COLOR control); we drive emissive + color directly.
     parts.lightring.material.emissive.set(hex);
     parts.lightring.material.color.set(hex);
   }
@@ -115,7 +102,6 @@ export function createJiboRig(scene) {
               (Math.round(g * 255) << 8)  |
                Math.round(b * 255));
   }
-
   function setScreenHex(hex) {
     if (!parts.screen) return;
     parts.screen.material.emissive.set(hex);
@@ -128,22 +114,32 @@ export function createJiboRig(scene) {
     setScreenHex(0x12161c);
   }
 
-  const ready = loadGeom(GEOM_FILE, LEGACY_DIR).then((meshes) => {
-    for (const { name, skeletonFrameName, mesh, material } of meshes) {
-      const jointName = MESH_TO_JOINT[skeletonFrameName] ?? 'root';
+  const ready = (async () => {
+    const [skel, kin, meshes] = await Promise.all([
+      fetchJSON(SKEL_FILE),
+      fetchJSON(KIN_FILE),
+      loadGeom(GEOM_FILE, LEGACY_DIR),
+    ]);
 
-      // Per-mesh material tweaks.
+    // 1. Build the skeleton tree and mount it under the Y-up wrapper.
+    const skeletonRoot = buildSkeleton(skel.content, frameMap);
+    root.add(skeletonRoot);
+
+    // 2. Attach each mesh to its named frame with plain .add() — the verts
+    //    are already in that frame's local space (ArticulatedModelLoader).
+    for (const { name, skeletonFrameName, mesh, material } of meshes) {
+      const frame = frameMap[skeletonFrameName];
+      if (!frame) {
+        console.warn(`jibo: no skeleton frame "${skeletonFrameName}" for mesh ${name}`);
+        continue;
+      }
+
       if (name === 'lightringMeshMesh') {
-        // The .geom's lightringMaterial is all-zero (it's meant to be driven
-        // by the three LED color DOFs). Initialize to a visible cyan; the
-        // setLEDHex API takes over after that.
         material.emissive.set(0x4ec9ff);
         material.color.set(0x4ec9ff);
         parts.lightring = mesh;
       } else if (name === 'screenMeshBillboardMesh') {
-        // Source material has emissive (1,1,1) and no diffuse — meant to
-        // display a render-target texture in the legacy sim. Start with a
-        // dark panel; M2 will swap in an iframe-driven texture.
+        // Render-target target in the legacy sim; dark panel until M2.
         material.map = null;
         material.emissive.set(0x12161c);
         material.color.set(0x12161c);
@@ -151,25 +147,41 @@ export function createJiboRig(scene) {
       }
 
       parts.byName[name] = mesh;
-      // The .geom vertices are baked in world rest coords. Add to scene
-      // first, then attach() into the joint group — attach preserves the
-      // world transform, computing the local transform automatically so
-      // articulation works correctly.
-      scene.add(mesh);
-      joints[jointName].attach(mesh);
+      frame.add(mesh);
     }
+
+    // 3. Wire up the ROTATION controls from the kinematics file.
+    for (const c of kin.content.controls) {
+      if (c.controlType !== 'ROTATION') continue;
+      const frame = frameMap[c.skeletonFrameName];
+      if (!frame) continue;
+      controls[c.dofName] = {
+        frame,
+        axis: new THREE.Vector3().fromArray(c.xyzRotationAxis).normalize(),
+        initialRotation: quatFromWXYZ(c.wxyzQuatInitialRotation),
+        min: c.min, max: c.max, isCyclic: !!c.isCyclic,
+      };
+      // Use the bottom (whole-body) control for the shared slider range.
+      if (c.dofName === 'bottomSection_r') {
+        dofMin = c.min; dofMax = c.max; dofCyclic = !!c.isCyclic;
+      }
+    }
+
     reset();
-  });
+  })();
 
   return {
     root,
     ready,
+    get dofMin() { return dofMin; },
+    get dofMax() { return dofMax; },
+    get dofCyclic() { return dofCyclic; },
     dofs: ['bottomSection_r', 'middleSection_r', 'topSection_r'],
-    dofMin: -3.0543, dofMax: 3.0543, dofCyclic: true,
     setBottom, setMiddle, setTop, setDof,
     setLEDColor, setLEDHex,
     setScreenHex,
     parts,
+    frames: frameMap,
     reset,
   };
 }
