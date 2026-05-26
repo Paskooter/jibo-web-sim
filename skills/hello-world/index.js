@@ -62,6 +62,10 @@ function runRoutine() {
 jibo.init('face', function (err) {
   if (err) { console.error('[hello-world] init failed:', err); return; }
 
+  // While a Mim dialog is listening it owns the input, so the catch-all chat
+  // handler below must stand down (otherwise both react to the same words).
+  var mimActive = false;
+
   jibo.face.setColor('#4ec9ff');
   jibo.face.lookForward();
 
@@ -85,7 +89,7 @@ jibo.init('face', function (err) {
 
   // Listen for recognized speech, interpret it, and reply with a gesture.
   jibo.asr.on('speech', function (e) {
-    if (!e || !e.final) return;
+    if (!e || !e.final || mimActive) return;
     jibo.nlu.parseFromRule(CHAT_RULE, e.words, function (nluErr, res) {
       var intent = !nluErr && res && res.NLParse ? res.NLParse.intent : null;
       var score = res ? res.heuristic_score : 0;
@@ -104,6 +108,7 @@ jibo.init('face', function (err) {
           jibo.flow.run('flows/greeting.flow', {}, function () {});
         });
       } else if (intent && score >= 0.5 && intent === 'ask') {
+        mimActive = true;
         var mim = new jibo.bt.behaviors.Mim({
           mimPath: 'mims/agree.mim',
           onSuccess: function (res) {
@@ -113,7 +118,7 @@ jibo.init('face', function (err) {
           },
           onFailure: function () { jibo.tts.speak('No worries, maybe another time.'); return 'done'; },
         });
-        jibo.bt.run(mim, {}, function () {});
+        jibo.bt.run(mim, {}, function () { mimActive = false; });
       } else if (intent && score >= 0.5 && intent === 'loop') {
         jibo.kb.loop.loadLoopActive(function (kbErr, users) {
           var names = (users || []).map(function (u) { return u.getWrittenName(); });
