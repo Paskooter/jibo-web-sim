@@ -15,6 +15,7 @@
 import { createEye } from './face-eye.js';
 import { createSound } from './sound.js';
 import { createBt } from './bt.js';
+import { createFlow } from './flow.js';
 
 let nextId = 1;
 const pendingCalls = new Map();          // id -> { resolve, reject }
@@ -287,8 +288,9 @@ export function installJiboShim() {
     version: '0.0.0-websim',
   };
 
-  // Behavior trees run client-side; their leaves call the services above.
+  // Behavior trees + flows run client-side; their leaves call the services above.
   jibo.bt = createBt(jibo);
+  jibo.flow = createFlow(jibo);
 
   // Announce readiness so the host flushes any queued events to us.
   parent.postMessage({ __jibo: true, kind: 'hello' }, '*');

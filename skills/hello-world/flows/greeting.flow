@@ -1,0 +1,25 @@
+{
+  "class": "go.GraphLinksModel",
+  "dataFormat": "flow-1",
+  "nodeKeyProperty": "id",
+  "nodeCategoryProperty": "class",
+  "nodeDataArray": [
+    { "class": "Flow.Begin", "id": "begin", "name": "Begin",
+      "options": { "inputParameters": ["() => { return {}; }"] } },
+    { "class": "Flow.Eval", "id": "pick", "name": "Pick a branch",
+      "options": { "exec": ["() => (Math.random() < 0.5 ? 'happy' : 'curious')"] } },
+    { "class": "Flow.Behavior", "id": "happy", "name": "Say happy",
+      "options": { "getBehavior": ["() => new jibo.bt.behaviors.TextToSpeech({ words: 'This branch of the flow feels happy!' })"] } },
+    { "class": "Flow.Behavior", "id": "curious", "name": "Say curious",
+      "options": { "getBehavior": ["() => new jibo.bt.behaviors.TextToSpeech({ words: 'How curious, the flow chose the other branch!' })"] } },
+    { "class": "Flow.End", "id": "end", "name": "End",
+      "options": { "getTransition": ["() => undefined"] } }
+  ],
+  "linkDataArray": [
+    { "from": "begin", "to": "pick" },
+    { "from": "pick", "to": "happy", "text": "happy" },
+    { "from": "pick", "to": "curious", "text": "curious" },
+    { "from": "happy", "to": "end" },
+    { "from": "curious", "to": "end" }
+  ]
+}

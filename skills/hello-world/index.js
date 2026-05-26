@@ -20,6 +20,7 @@ var CHAT_RULE = {
     notify: ['notify me', 'remind me', 'send a notification'],
     photo: ['take a photo', 'take a picture', 'say cheese'],
     routine: ['do a routine', 'do your thing', 'run a behavior tree'],
+    flow: ['run a flow', 'do a flow', 'show me a flow'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -96,6 +97,10 @@ jibo.init('face', function (err) {
         sayWithGesture("Okay, I've sent you a notification.", 'nodYes');
       } else if (intent && score >= 0.5 && intent === 'routine') {
         runRoutine();
+      } else if (intent && score >= 0.5 && intent === 'flow') {
+        jibo.tts.speak('Running a flow!', function () {
+          jibo.flow.run('flows/greeting.flow', {}, function () {});
+        });
       } else if (intent && score >= 0.5 && intent === 'photo') {
         jibo.tts.speak('Say cheese!', function () {
           jibo.lps.takePhoto(null, true, jibo.lps.CameraID.LEFT, jibo.lps.PhotoType.FULL, function (err) {
