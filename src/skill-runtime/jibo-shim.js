@@ -63,6 +63,11 @@ export function installJiboShim() {
   on('tts', 'start', () => { if (eye) eye.setTalking(true); });
   on('tts', 'stop', () => { if (eye) eye.setTalking(false); });
 
+  // 'face' events let the host (animation playback) drive the eye.
+  on('face', 'look', (d) => { if (eye) eye.lookAt(d.x, d.y); });
+  on('face', 'color', (d) => { if (eye) eye.setColor(d.hex); });
+  on('face', 'blink', () => { if (eye) eye.blink(); });
+
   const tts = {
     speak(text, options, cb) {
       if (typeof options === 'function') { cb = options; options = undefined; }
@@ -112,6 +117,23 @@ export function installJiboShim() {
     setColor(hex) { if (eye) eye.setColor(hex); },
   };
 
+  // Keyframed body/LED/eye animation, played host-side on the rig.
+  const animate = {
+    play(name, options, cb) {
+      if (typeof options === 'function') { cb = options; options = undefined; }
+      const p = rawCall('animate', 'play', [name, options]);
+      if (cb) { p.then(() => cb(), (e) => cb(e)); return; }
+      return p;
+    },
+    stop(cb) {
+      const p = rawCall('animate', 'stop', []);
+      if (cb) { p.then(() => cb(), (e) => cb(e)); return; }
+      return p;
+    },
+    setLEDColor(r, g, b) { rawCall('animate', 'setLEDColor', [r, g, b]); },
+    blink() { if (eye) eye.blink(); },
+  };
+
   function resolveDisplay(arg) {
     if (arg && arg.display) arg = arg.display;
     if (typeof arg === 'string') return document.getElementById(arg) || document.body;
@@ -134,6 +156,7 @@ export function installJiboShim() {
     nlu,
     asr,
     face,
+    animate,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',

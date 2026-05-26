@@ -14,6 +14,7 @@ import { createSessionService } from './bridge/services/session-service.js';
 import { createTtsService } from './bridge/services/tts-service.js';
 import { createNluService } from './bridge/services/nlu-service.js';
 import { createAsrService } from './bridge/services/asr-service.js';
+import { createAnimationService } from './bridge/services/animation-service.js';
 
 const viewportEl = document.getElementById('viewport');
 const statusEl = document.getElementById('status');
@@ -102,6 +103,13 @@ function startSkillRuntime() {
   const asr = createAsrService({ emit: (event, data) => bridge.emit('asr', event, data) });
   bridge.register('asr', asr.service);
   chat.setSendHandler((text) => asr.recognize(text));
+
+  // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.
+  bridge.register('animate', createAnimationService({
+    rig: viewport.rig,
+    emitFace: (event, data) => bridge.emit('face', event, data),
+    loadAnim: (uri) => fetch(`/assets/jibo-legacy/${uri}`).then((r) => r.json()),
+  }));
 
   const overlay = createFaceOverlay({
     viewportEl,
