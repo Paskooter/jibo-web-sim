@@ -86,5 +86,10 @@ export function createAnimationService({ rig, emitFace, loadAnim }) {
     emitFace('blink', {});
   }
 
-  return { play, stop, setLEDColor, blink };
+  // True while a gesture is playing (look-at yields to it).
+  function isActive() {
+    return activeResolve !== null;
+  }
+
+  return { play, stop, setLEDColor, blink, isActive };
 }

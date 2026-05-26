@@ -284,3 +284,35 @@ body {
   border-radius: 4px;
   word-break: break-word;
 }
+
+/* LPS tab */
+.lps-panel { color: var(--fg); }
+.lps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  grid-template-areas: ". up ." "left front right" ". down .";
+  max-width: 220px;
+}
+.lps-grid [data-preset="Up"] { grid-area: up; }
+.lps-grid [data-preset="Left"] { grid-area: left; }
+.lps-grid [data-preset="Front"] { grid-area: front; }
+.lps-grid [data-preset="Right"] { grid-area: right; }
+.lps-grid [data-preset="Down"] { grid-area: down; }
+.lps-grid button,
+.lps-clear {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 8px; cursor: pointer; font-size: 12px;
+}
+.lps-grid button:hover,
+.lps-clear:hover { border-color: var(--accent); }
+.lps-clear { width: 100%; margin-top: 4px; }
+.lps-check {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--fg-dim); margin-bottom: 10px;
+}
+.lps-readout {
+  font-size: 12px; color: var(--fg-dim); margin-top: 10px;
+  font-variant-numeric: tabular-nums;
+}

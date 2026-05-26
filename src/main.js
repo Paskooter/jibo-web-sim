@@ -3,11 +3,14 @@
 // services, with its face projected onto Jibo's 3D screen.
 // Vanilla ESM, no framework, no bundler.
 
+import * as THREE from 'three';
 import { createViewport } from './viewport/scene.js';
+import { createLookAtController } from './viewport/lookat.js';
 import { installTabs } from './ui/tabs.js';
 import { installRigPanel } from './ui/rig-panel.js';
 import { installChatPanel } from './ui/chat-panel.js';
 import { installTtsPanel } from './ui/tts-panel.js';
+import { installLpsPanel } from './ui/lps-panel.js';
 import { createHostBridge } from './bridge/host-bridge.js';
 import { createFaceOverlay } from './bridge/face-overlay.js';
 import { createSessionService } from './bridge/services/session-service.js';
@@ -15,6 +18,7 @@ import { createTtsService } from './bridge/services/tts-service.js';
 import { createNluService } from './bridge/services/nlu-service.js';
 import { createAsrService } from './bridge/services/asr-service.js';
 import { createAnimationService } from './bridge/services/animation-service.js';
+import { createLpsService } from './bridge/services/lps-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
 const SKILL_DIR = '/skills/hello-world';
@@ -32,6 +36,13 @@ installTabs(document.getElementById('tabs'), panelsEl);
 installRigPanel(panelsEl.querySelector('[data-panel="rig"]'), viewport.rig);
 const chat = installChatPanel(panelsEl.querySelector('[data-panel="chat"]'));
 const ttsPanel = installTtsPanel(panelsEl.querySelector('[data-panel="tts"]'));
+
+// LPS target is set once the runtime is up; the panel delegates through this.
+let setActiveTarget = () => {};
+const lpsPanel = installLpsPanel(panelsEl.querySelector('[data-panel="lps"]'), {
+  onSetTarget: (t) => setActiveTarget(t),
+  onPlacementMode: (on) => viewport.setPlacement(on ? (pt) => setActiveTarget(pt) : null),
+});
 
 // Subtitle bar over the viewport (TTS output).
 const subtitleEl = document.createElement('div');
@@ -108,11 +119,42 @@ async function startSkillRuntime() {
   chat.setSendHandler((text) => asr.recognize(text));
 
   // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.
-  bridge.register('animate', createAnimationService({
+  const animation = createAnimationService({
     rig: viewport.rig,
     emitFace: (event, data) => bridge.emit('face', event, data),
     loadAnim: (uri) => fetch(`/assets/jibo-legacy/${uri}`).then((r) => r.json()),
-  }));
+  });
+  bridge.register('animate', animation);
+
+  // jibo.lps + look-at: Jibo turns to track a target placed in the world.
+  const lps = createLpsService({ emit: (event, data) => bridge.emit('lps', event, data) });
+  bridge.register('lps', lps.service);
+
+  const marker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.018, 20, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffb454 }),
+  );
+  marker.visible = false;
+  viewport.scene.add(marker);
+
+  const lookat = createLookAtController({
+    rig: viewport.rig,
+    screenMesh,
+    emitFace: (event, data) => bridge.emit('face', event, data),
+    isBusy: () => animation.isActive(),
+    dofMax: viewport.rig.dofMax,
+  });
+  lookat.calibrate();
+  viewport.onFrame(lookat.update);
+
+  setActiveTarget = (pt) => {
+    const t = pt ? { x: pt.x, y: pt.y, z: pt.z } : null;
+    lps.setTarget(t);
+    lookat.setTarget(t);
+    marker.visible = !!t;
+    if (t) marker.position.set(t.x, t.y, t.z);
+    lpsPanel.showTarget(t);
+  };
 
   const overlay = createFaceOverlay({
     viewportEl,

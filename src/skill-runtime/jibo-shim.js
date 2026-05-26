@@ -108,6 +108,18 @@ export function installJiboShim() {
     off: (event, fn) => off('asr', event, fn),
   };
 
+  // Local Perceptual Space: look-at targets around Jibo. 'target' /
+  // 'target-lost' events arrive from the host; getTarget() queries the current.
+  const lps = {
+    on: (event, fn) => on('lps', event, fn),
+    off: (event, fn) => off('lps', event, fn),
+    getTarget(cb) {
+      const p = rawCall('lps', 'getTarget', []);
+      if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
+      return p;
+    },
+  };
+
   // The face/eye renders locally in this iframe (no bridge round-trip needed).
   const face = {
     get eye() { return eye; },
@@ -155,6 +167,7 @@ export function installJiboShim() {
     tts,
     nlu,
     asr,
+    lps,
     face,
     animate,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },

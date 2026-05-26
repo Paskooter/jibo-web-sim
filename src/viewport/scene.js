@@ -30,6 +30,26 @@ export function createViewport(hostEl) {
   controls.minDistance = 0.2;
   controls.maxDistance = 3;
 
+  // Click-to-place: when a handler is registered we suspend orbit-rotate and
+  // turn viewport clicks into a world point ~0.6 m down the camera ray.
+  const raycaster = new THREE.Raycaster();
+  let placementHandler = null;
+  function setPlacement(handler) {
+    placementHandler = handler || null;
+    controls.enableRotate = !placementHandler;
+  }
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (!placementHandler) return;
+    const r = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - r.left) / r.width) * 2 - 1,
+      -((e.clientY - r.top) / r.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, camera);
+    const pt = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(0.6));
+    placementHandler(pt);
+  });
+
   // Lighting
   scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x202028, 0.65));
   const key = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -91,6 +111,7 @@ export function createViewport(hostEl) {
     resetView,
     dispose,
     onFrame,
+    setPlacement,
     scene,
     camera,
     renderer,
