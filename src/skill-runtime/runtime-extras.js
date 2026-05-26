@@ -65,9 +65,16 @@ export function createUtils() {
 function tolerantStub() {
   const fn = function () {};
   return new Proxy(fn, {
-    get(t, p) { if (p === 'then') return undefined; if (typeof p === 'symbol') return () => ''; return p in t ? t[p] : tolerantStub(); },
-    apply() { return undefined; },
-    construct() { return {}; },
+    get(t, p) {
+      if (p === 'then') return (onF) => { if (typeof onF === 'function') { try { onF(undefined); } catch (_) { /* ignore */ } } return tolerantStub(); };
+      if (p === 'catch') return () => tolerantStub();
+      if (p === 'finally') return (onF) => { if (typeof onF === 'function') { try { onF(); } catch (_) { /* ignore */ } } return tolerantStub(); };
+      if (p === Symbol.toPrimitive || p === 'toString' || p === 'valueOf') return () => '';
+      if (typeof p === 'symbol') return undefined;
+      return p in t ? t[p] : tolerantStub();
+    },
+    apply() { return tolerantStub(); },
+    construct() { return tolerantStub(); },
   });
 }
 

@@ -67,13 +67,18 @@ function tolerantStub() {
   const fn = function () {};
   return new Proxy(fn, {
     get(target, prop) {
-      if (prop === 'then') return undefined;                 // not a thenable
+      // Act as a resolved promise (many jibo APIs return one); resolve with
+      // undefined — NOT another stub — to avoid infinite promise-chaining.
+      if (prop === 'then') return (onF) => { if (typeof onF === 'function') { try { onF(undefined); } catch (_) { /* ignore */ } } return tolerantStub(); };
+      if (prop === 'catch') return () => tolerantStub();
+      if (prop === 'finally') return (onF) => { if (typeof onF === 'function') { try { onF(); } catch (_) { /* ignore */ } } return tolerantStub(); };
       if (prop === Symbol.toPrimitive || prop === 'toString' || prop === 'valueOf') return () => '';
+      if (typeof prop === 'symbol') return undefined;
       if (prop in target) return target[prop];
       return tolerantStub();
     },
-    apply() { return undefined; },
-    construct() { return {}; },
+    apply() { return tolerantStub(); },     // chainable: foo().bar().baz won't throw
+    construct() { return tolerantStub(); },
   });
 }
 
