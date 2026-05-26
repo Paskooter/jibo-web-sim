@@ -230,6 +230,15 @@ export function installJiboShim() {
     playRecording(options, cb) { if (cb) cb(null); },
   };
 
+  // jibo.mim — multimodal-interaction manager surface (the Mim/Menu behaviors
+  // do the work; this exposes the manager config skills may reference).
+  const mim = {
+    ListenMode: { NORMAL: 'NORMAL', OPTIONAL_RESPONSE: 'OPTIONAL_RESPONSE', NO_BODY: 'NO_BODY', UI: 'UI' },
+    listenDelegate: null,
+    speakDelegate: null,
+    timeoutIgnoresSimulator: false,
+  };
+
   // jibo.system — device info. Static mock values in the web sim.
   const system = {
     pluggedIn: true,
@@ -341,6 +350,7 @@ export function installJiboShim() {
     media,
     system,
     kb,
+    mim,
     timer,
     utils,
     loader,

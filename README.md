@@ -2,65 +2,100 @@
 
 A modern, browser-only re-implementation of the Jibo SDK simulator (`jibo sim`).
 
-The legacy simulator (`sdk-archive/jibo-cli` on the local Gitea) is an Electron
-app: it hosts the skill UI in a `<webview>`, projects an HTML face plane over
-a Three.js body, and wires renderer-side React 0.13 to skill code through
-Electron IPC. This project replaces all of that with a static, browser-only
-build.
+The legacy simulator (`sdk-archive/jibo-cli`) is an Electron app: it hosts the
+skill in a `<webview>`, projects an HTML face over a Three.js body, and wires
+renderer-side React to skill code over Electron IPC. This project replaces all
+of that with a static, browser-only build — and re-implements the public
+`jibo.*` API so real skills run largely unchanged.
 
 ## Stack
 
-- Vanilla JavaScript, ES modules
-- No bundler, no framework, no TypeScript
-- Three.js for the 3D viewport (vendored under `vendor/`)
-- Plain `import map` in `index.html`
-- Skill isolation via a sandboxed `<iframe>` + `postMessage`
+- Vanilla JavaScript, ES modules. No bundler, no framework, no TypeScript.
+- Three.js r166 for the 3D viewport (vendored under `vendor/`, MIT).
+- Plain `<script type="importmap">` in `index.html`.
+- Skill isolation via a sandboxed `<iframe>` + a `postMessage` bridge.
 
 ## Running it
 
 ```sh
-cd jibo-web-sim
-npm install     # one-time; pulls in Express (the dev server's only dep)
-npm start       # listens on http://localhost:8080/
+npm install     # one-time; only dep is Express (the dev server)
+npm start       # http://localhost:8080/
 ```
 
-`server.js` is a ~15-line Express static-file server. Disables caching so
-edits are picked up on refresh. No build step.
+`server.js` is a ~15-line Express static server (no caching, no build step).
+Open the page and click **Start Jibo** (the click also unlocks audio).
+
+## How it works
+
+- **3D body** (`src/viewport/`) — the legacy `jibo_body.geom/.skel/.kin` loaded
+  faithfully (full skeleton, inverted quaternions, frame-local meshes; Z-up
+  model parented under a −90°X wrapper). Three DOFs articulate the rig.
+- **Skill sandbox** — the skill runs in an `<iframe>` whose `jibo` runtime
+  (`src/skill-runtime/`) proxies API calls to **host services**
+  (`src/bridge/`) over `postMessage`. Client-side concerns (eye, sound, bt,
+  flow, kb) run in the iframe; world/host concerns (body, tts timing, lps,
+  notifications, photo) run in the host.
+- **Face overlay** — the skill iframe is projected onto the screen quad via a
+  4-point homography (`matrix3d`), recomputed each frame with back-face culling.
+- **Look-at** — a faithful port of the animation-utilities `Lookat` solver
+  (analytical per-joint IK + acceleration-limited motion) drives the rig toward
+  LPS targets / audio events.
+- **Behavior trees & flows** run client-side in the iframe; their leaves call
+  the `jibo.*` services.
 
 ## Layout
 
 ```
-index.html                # entry; declares the import map
-assets/css/main.css       # all styles
+index.html                     import map, viewport, sidebar, skill picker
+server.js                      Express static dev server
 src/
-  main.js                 # boot
-  viewport/scene.js       # Three.js scene + camera + (placeholder) body
-  ui/tabs.js              # sidebar tab strip
-  ipc/                    # host <-> skill postMessage envelope (TBD)
-  services/               # host-side BodyService, AsrService, ... (TBD)
-  shim/                   # in-iframe `jibo` global, proxies to host (TBD)
-  skill-host/             # iframe bootstrap loader (TBD)
-vendor/                   # three.module.js, OrbitControls.js (vendored, MIT)
-demo/hello-world/         # canonical bring-up skill (TBD)
-docs/                     # design notes
+  main.js                      boot: viewport + tabs + panels + bridge + skill
+  viewport/                    scene, jibo rig (geom loader), look-at, audio-event
+  ui/                          rig / chat / tts / lps / audio / notifications panels
+  bridge/                      host bridge + services (session/tts/nlu/asr/lps/
+                               animation/notifications/media) + face overlay
+  skill-runtime/               in-iframe jibo shim: eye, sound, bt, flow, kb,
+                               runtime-extras (timer/utils/loader/lifecycle),
+                               skill-loader, boot
+skills/
+  hello-world/                 hand-written demo bundle (manifest + flow + mim)
+  fortune-teller/              second bundle (demonstrates the skill picker)
+vendor/                        three.module.js + OrbitControls (MIT)
+assets/jibo-legacy/            jibo_body.geom/.skel/.kin + texture
+docs/                          design notes + session handoff
 ```
 
-## Milestones
+## `jibo.*` API coverage
 
-- **M0** — scaffold, Three.js viewport renders, sidebar tabs switch.  *(current)*
-- **M1** — articulated Jibo body (3 joints) + LED ring, kinematic test harness.
-- **M2** — iframe skill loader + `jibo` shim covering `init`, `face`, `tts`, `nlu`.
-- **M3** — Chat tab routes fake-ASR utterances into the skill; TTS subtitle bar.
-- **M4** — `jibo.animate` keyframe playback + LED API.
-- **M5** — Hello World skill loads end-to-end.
+| Namespace | Status |
+|-----------|--------|
+| `init`, `RunMode`, `runMode`, `versions`, `lifecycle` | ✅ |
+| `tts` (speak/stop/events/getWordTimings) | ✅ real audio (Web Speech), queued |
+| `face` (lookAt/blink/setColor/gestures/eye) | ✅ canvas eye + screen touch |
+| `animate` (play/blink/lookAt/createLookat·AnimationBuilder/LED/dofs) | ✅ |
+| `lps` (target/audible entity/takePhoto) | ✅ + look-at + audio events |
+| `sound`, `notifications`, `media`, `system`, `kb`, `nlu` | ✅ (kb in-memory; nlu token-matcher) |
+| `bt` (lifecycle, composites, ~20 behaviors incl. Listen/Mim/Menu, decorators) | ✅ |
+| `flow` (FlowExecutor, GoJS `.flow`, activities incl. Mim/Menu) | ✅ |
+| `timer`, `utils`, `loader` | ✅ |
+| `mim` (Mim/Menu behaviors + manager surface) | ⚠️ dialog loop only (no GUI/FST) |
+| `gl`, `rendering.gui`, `systemManager`, `animUtils` | ❌ not implemented |
+
+Sim stand-ins: ASR is the Chat tab (no wake-word/STT); NLU is a token-overlap
+matcher (not the FST engine); `takePhoto` captures the viewport; `kb`/`system`
+are in-memory/mock.
+
+## Milestones (all complete)
+
+M0 scaffold · M1 rig + LED · M2 iframe bridge + face overlay · M3 chat +
+audible TTS · M4 `jibo.animate` · M5 manifest-loaded skill bundle · M6 look-at
++ LPS · M7 audio events · M8 sound + notifications · M9 touch + photo + system
+· M10 behavior trees + flows · M11 kb + skill picker · M12 Mim/Menu.
 
 ## Why a rewrite (vs. reviving the Electron sim)
 
-- Browser-only: no Electron build, no per-OS packaging, hostable from
-  `data.jibo`'s nginx.
-- No `<webview>`/`nodeintegration`: skills run in a real sandboxed iframe,
-  isolated by the platform, talking over `postMessage`.
-- Modern Three.js (r166) instead of the patched `animation-utilities` blob
-  Worker pipeline that the legacy renderer used.
-- Distinct code: the legacy source is consulted as reference (IO surface,
-  IPC envelopes, the face-on-body perspective trick) but nothing is copied.
+- Browser-only: no Electron, no per-OS packaging; hostable as static files.
+- Real sandboxed iframe + `postMessage` instead of `<webview>`/`nodeintegration`.
+- Modern Three.js instead of the patched `animation-utilities` worker pipeline.
+- Distinct code & naming: the legacy source is consulted as the spec (IO
+  formats, the look-at solver, the face-on-body homography) but not copied.

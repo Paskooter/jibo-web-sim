@@ -1,0 +1,13 @@
+{
+  "mim_type": "question",
+  "rule_name": "rules/agree.fst",
+  "sample_utterances": "yes,yeah,sure,yep,no,nope,nah",
+  "timeout": 15,
+  "num_tries_for_gui": 2,
+  "barge_in": true,
+  "prompts": [
+    { "prompt_sub_category": "Q", "prompt": "Do you like robots? Say yes or no.", "media": "TTS" },
+    { "prompt_sub_category": "NM", "prompt": "Hmm, I didn't catch that — just say yes or no.", "media": "TTS" },
+    { "prompt_sub_category": "NI", "prompt": "I'm still listening. Yes, or no?", "media": "TTS" }
+  ]
+}

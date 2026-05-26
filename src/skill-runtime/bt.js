@@ -262,6 +262,117 @@ export function createBt(jibo) {
     start() { if (this.options.onBarcode) this.options.onBarcode('barcode unsupported in web sim', null); return true; }
     update() { return Status.SUCCEEDED; }
   }
+  // Mim — multimodal interaction: speak a prompt, listen against the .mim's
+  // rule, retry on no-match/no-input, report success/failure. A pragmatic
+  // subset of the SDK state machine (no GUI fallback / FST). The behavior
+  // SUCCEEDS in all dialog outcomes; the flow uses onSuccess/onFailure's return
+  // value to choose its transition.
+  class Mim extends AsyncLeaf {
+    begin() {
+      this._tries = 0;
+      this._state = { tries: 0, noInputCount: 0, noMatchCount: 0, lastResultState: '', success: false, failure: false };
+      fetch(this.options.mimPath).then((r) => r.json()).then((cfg) => {
+        this._cfg = cfg;
+        this._maxTries = cfg.num_tries_for_gui || cfg.tries || 2;
+        this._phrases = String(cfg.sample_utterances || '').split(',').map((s) => s.trim()).filter(Boolean);
+        if ((cfg.mim_type || 'question') === 'question') this._attempt('Q');
+        else this._announce();          // statement / announcement: speak only
+      }).catch((e) => { console.error('[mim] load failed', e); this._done = Status.FAILED; });
+    }
+    _announce() {
+      const prompt = this._pickPrompt('Q');
+      const done = () => {
+        this._state.success = true; this._state.lastResultState = 'success';
+        this.result = this.options.onSuccess ? this.options.onSuccess(this._result(null, '')) : undefined;
+        this._done = Status.SUCCEEDED;
+      };
+      if (prompt && prompt.prompt) jibo.tts.speak(prompt.prompt, done); else done();
+    }
+    _pickPrompt(sub) {
+      const all = this._cfg.prompts || [];
+      const matched = all.filter((p) => String(p.prompt_sub_category || 'Q').toUpperCase().startsWith(sub));
+      const pool = matched.length ? matched : all;
+      return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+    }
+    _attempt(sub) {
+      const prompt = this._pickPrompt(sub);
+      const speakThen = () => this._listen();
+      if (prompt && prompt.prompt) jibo.tts.speak(prompt.prompt, speakThen);
+      else speakThen();
+    }
+    _listen() {
+      let settled = false;
+      const done = (fn) => { if (settled) return; settled = true; jibo.asr.off('speech', handler); clearTimeout(this._timer); fn(); };
+      const handler = (e) => { if (e && e.final) done(() => this._analyze(e.words)); };
+      this._timer = setTimeout(() => done(() => this._noInput()), (this._cfg.timeout || 6) * 1000);
+      this._stopListen = () => done(() => {});
+      jibo.asr.on('speech', handler);
+    }
+    _result(res, input) {
+      return { state: this._state, asrResults: { data: res, Input: input, NLParse: res ? res.NLParse : {}, heuristic_score: res ? res.heuristic_score : 0, slotIds: [] } };
+    }
+    _analyze(words) {
+      const rule = this._phrases.length ? this._phrases.join('|') : (this._cfg.rule_name || '');
+      jibo.nlu.parseFromRule(rule, words, (err, res) => {
+        if (res && res.heuristic_score >= 0.5) {
+          this._state.success = true; this._state.lastResultState = 'success';
+          this.result = this.options.onSuccess ? this.options.onSuccess(this._result(res, words)) : undefined;
+          this._done = Status.SUCCEEDED;
+        } else { this._retry('NM', res, words); }
+      });
+    }
+    _noInput() { this._state.noInputCount++; this._retry('NI', null, ''); }
+    _retry(sub, res, words) {
+      if (sub === 'NM') this._state.noMatchCount++;
+      this._state.tries = (++this._tries);
+      if (this.options.onStatus) this.options.onStatus(this._result(res, words));
+      if (this._tries >= this._maxTries) {
+        this._state.failure = true; this._state.lastResultState = 'failure';
+        this.result = this.options.onFailure ? this.options.onFailure(this._result(res, words)) : undefined;
+        this._done = Status.SUCCEEDED;
+      } else { this._attempt(sub); }
+    }
+    stop() { if (this._stopListen) this._stopListen(); return Promise.resolve(); }
+  }
+  // Menu — a simple clickable list rendered on the face (the SDK's GUI MenuView
+  // is out of scope). getConfig provides items; onItemChosen fires on a click.
+  class Menu extends AsyncLeaf {
+    begin() {
+      this.options.getConfig((config) => this._render(config || {}));
+    }
+    _render(config) {
+      const items = config.items || config.options || config || [];
+      const el = document.createElement('div');
+      el.className = 'jibo-menu';
+      Object.assign(el.style, {
+        position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
+        gap: '20px', background: 'rgba(5,7,10,0.85)', font: '40px system-ui, sans-serif',
+      });
+      (Array.isArray(items) ? items : []).forEach((item, i) => {
+        const label = item.label || item.text || item.title || String(item);
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        Object.assign(btn.style, { font: 'inherit', padding: '16px 40px', borderRadius: '16px', border: '3px solid #4ec9ff', background: '#0e1722', color: '#dff' });
+        btn.onclick = () => this._choose(item, i);
+        el.appendChild(btn);
+      });
+      document.body.appendChild(el);
+      this._el = el;
+    }
+    _choose(item, index) {
+      if (this.options.onItemChosen) this.options.onItemChosen(item, null, () => {});
+      this.result = item;
+      this._cleanup();
+      this._done = Status.SUCCEEDED;
+    }
+    _cleanup() { if (this._el) { this._el.remove(); this._el = null; } }
+    stop() {
+      if (this.options.onMenuClosed) this.options.onMenuClosed(true, null, () => {});
+      this._cleanup();
+      return Promise.resolve();
+    }
+  }
 
   // ---- decorators ----
   class TimeoutSucceed extends Decorator {
@@ -356,7 +467,7 @@ export function createBt(jibo) {
     Sequence, Switch, Parallel, Random, Null, ExecuteScript, ExecuteScriptAsync,
     TextToSpeech, TextToSpeechJs: TextToSpeech, Blink, LookAt, PlayAnimation, PlayAudio,
     TakePhoto, TimeoutJs, Listen, ListenJs: Listen, ListenEmbedded: Listen,
-    Subtree, SubtreeJs: Subtree, ReadBarcode,
+    Subtree, SubtreeJs: Subtree, ReadBarcode, Mim, Menu,
   };
   const decorators = {
     TimeoutSucceed, TimeoutSucceedJs, TimeoutFail, SucceedOnCondition, FailOnCondition,

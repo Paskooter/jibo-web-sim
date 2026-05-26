@@ -22,6 +22,7 @@ var CHAT_RULE = {
     routine: ['do a routine', 'do your thing', 'run a behavior tree'],
     flow: ['run a flow', 'do a flow', 'show me a flow'],
     loop: ['who do you know', 'who is in your loop', 'your loop'],
+    ask: ['ask me a question', 'ask me something', 'quiz me'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -102,6 +103,17 @@ jibo.init('face', function (err) {
         jibo.tts.speak('Running a flow!', function () {
           jibo.flow.run('flows/greeting.flow', {}, function () {});
         });
+      } else if (intent && score >= 0.5 && intent === 'ask') {
+        var mim = new jibo.bt.behaviors.Mim({
+          mimPath: 'mims/agree.mim',
+          onSuccess: function (res) {
+            var said = res.asrResults.Input || '';
+            jibo.tts.speak(/no|nope|nah/.test(said) ? "That's okay — I still like you!" : 'Me too! Robots are wonderful.');
+            return 'done';
+          },
+          onFailure: function () { jibo.tts.speak('No worries, maybe another time.'); return 'done'; },
+        });
+        jibo.bt.run(mim, {}, function () {});
       } else if (intent && score >= 0.5 && intent === 'loop') {
         jibo.kb.loop.loadLoopActive(function (kbErr, users) {
           var names = (users || []).map(function (u) { return u.getWrittenName(); });

@@ -91,6 +91,35 @@ export function createFlow(jibo) {
       run(def, {}, (result) => { this.result = this.options.onResult ? this.options.onResult(result) : result; this._done = true; });
     }
   }
+  // Mim.Question / Mim.Statement: run a Mim behavior; its onSuccess/onFailure
+  // return value becomes this activity's result -> the matching transition.
+  class FlowMim extends Activity {
+    start() {
+      this._done = false;
+      const mim = new jibo.bt.behaviors.Mim({
+        mimPath: this.options.mimPath,
+        getPromptData: this.options.getPromptData,
+        onStatus: this.options.onStatus,
+        onSuccess: this.options.onSuccess,
+        onFailure: this.options.onFailure,
+      });
+      this._tree = jibo.bt.run(mim, {}, () => { this.result = mim.result; this._done = true; });
+    }
+    stop() { if (this._tree && this._tree._cancelRaf) this._tree._cancelRaf(); }
+  }
+  class FlowMenu extends Activity {
+    start() {
+      this._done = false;
+      const menu = new jibo.bt.behaviors.Menu({
+        getConfig: this.options.getConfig,
+        onItemChosen: this.options.onItemChosen,
+        onMenuClosed: this.options.onMenuClosed,
+        onPositionalSelect: this.options.onPositionalSelect,
+      });
+      this._tree = jibo.bt.run(menu, {}, () => { this.result = menu.result; this._done = true; });
+    }
+    stop() { if (this._tree && this._tree._cancelRaf) this._tree._cancelRaf(); }
+  }
 
   const ACTIVITIES = {
     'Flow.Begin': FlowBegin,
@@ -101,6 +130,13 @@ export function createFlow(jibo) {
     'Flow.Behavior': FlowBehavior,
     'Flow.Subtree': FlowSubtree,
     'Flow.Subflow': FlowSubflow,
+    'Flow.Mim': FlowMim,
+    'Mim.Question': FlowMim,
+    'Mim.Statement': FlowMim,
+    'Mim.Announcement': FlowMim,
+    'Flow.Menu': FlowMenu,
+    'Menu.Single': FlowMenu,
+    'Menu.Multi': FlowMenu,
   };
   const registry = Object.assign({}, ACTIVITIES);
   function register(name, namespace, classRef) { registry[`${namespace}.${name}`] = classRef; }
