@@ -16,6 +16,7 @@ import { createEye } from './face-eye.js';
 import { createSound } from './sound.js';
 import { createBt } from './bt.js';
 import { createFlow } from './flow.js';
+import { createKb } from './kb.js';
 
 let nextId = 1;
 const pendingCalls = new Map();          // id -> { resolve, reject }
@@ -62,6 +63,7 @@ export function installJiboShim() {
   let eye = null;
   let session = null;
   const sound = createSound();   // client-side audio, local to the iframe
+  const kb = createKb();         // knowledge base + loop, local to the iframe
 
   // notifications: skill creates them; the host shows the banner.
   const notifications = {
@@ -283,6 +285,7 @@ export function installJiboShim() {
     notifications,
     media,
     system,
+    kb,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',

@@ -27,7 +27,8 @@ import { createNotificationsService } from './bridge/services/notifications-serv
 import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
-const SKILL_DIR = '/skills/hello-world';
+const SKILLS = ['/skills/hello-world', '/skills/fortune-teller'];
+let switchSkill = () => {};   // assigned once the runtime is up
 
 const viewportEl = document.getElementById('viewport');
 const statusEl = document.getElementById('status');
@@ -61,6 +62,21 @@ const notificationBanner = createNotificationBanner(viewportEl);
 installNotificationsPanel(panelsEl.querySelector('[data-panel="notes"]'), {
   onPush: (n) => pushNotification(n),
 });
+
+// Skill picker — populated from each bundle's manifest (display-name).
+const skillPicker = document.getElementById('skill-picker');
+(async () => {
+  for (const dir of SKILLS) {
+    try {
+      const m = await loadSkillManifest(dir);
+      const opt = document.createElement('option');
+      opt.value = dir;
+      opt.textContent = m.name;
+      skillPicker.appendChild(opt);
+    } catch (err) { console.error('skill manifest load failed:', dir, err); }
+  }
+})();
+skillPicker.addEventListener('change', () => switchSkill(skillPicker.value));
 
 // Subtitle bar over the viewport (TTS output).
 const subtitleEl = document.createElement('div');
@@ -262,16 +278,21 @@ async function startSkillRuntime() {
   });
   viewport.onFrame(overlay.update);
 
-  // Discover + load the skill from its manifest, then point the iframe at the
-  // bundle's entry (its own index.html).
-  try {
-    const skill = await loadSkillManifest(SKILL_DIR);
-    statusEl.textContent =
-      `M5 · ${skill.name} v${skill.version} · three.js r${viewport.threeRevision}`;
-    if (skill.prompt) chat.setPlaceholder(`${skill.prompt}…`);
-    iframe.src = skill.entry;
-  } catch (err) {
-    console.error('skill load failed:', err);
-    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · skill load FAILED — see console`;
+  // Load a skill from its manifest and point the iframe at the bundle entry.
+  // Used at boot and when the picker switches skills.
+  async function applySkill(dir) {
+    try {
+      const skill = await loadSkillManifest(dir);
+      statusEl.textContent = `M11 · ${skill.name} v${skill.version} · three.js r${viewport.threeRevision}`;
+      chat.setPlaceholder(skill.prompt ? `${skill.prompt}…` : 'Say something to Jibo…');
+      setActiveTarget(null);              // drop any look-at when switching skills
+      iframe.src = skill.entry;
+      if (skillPicker.value !== dir) skillPicker.value = dir;
+    } catch (err) {
+      console.error('skill load failed:', err);
+      statusEl.textContent = `M11 · three.js r${viewport.threeRevision} · skill load FAILED — see console`;
+    }
   }
+  switchSkill = applySkill;
+  applySkill(SKILLS[0]);
 }

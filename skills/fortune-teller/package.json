@@ -1,0 +1,14 @@
+{
+  "name": "fortune-teller",
+  "version": "0.1.0",
+  "description": "A second hand-written skill for the Jibo web simulator — tells fortunes.",
+  "main": "index.js",
+  "jibo": {
+    "main": "index.html",
+    "type": "behavior",
+    "launchRule": "launch.rule",
+    "prompt": "Ask Jibo for your fortune",
+    "display-name": "Fortune Teller"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,2 @@
+// Launch rule (NLU/FST grammar) — surfaced as the manifest prompt in the sim.
+TopRule = ($* (tell my fortune | fortune teller | read my fortune) {skill='fortune-teller'} $*);

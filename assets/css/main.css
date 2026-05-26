@@ -33,6 +33,13 @@ body {
   padding: 4px 10px; cursor: pointer;
 }
 #topbar button:hover { border-color: var(--accent); }
+.skill-pick { color: var(--fg-dim); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.skill-pick select {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 6px; font-size: 12px;
+}
+.skill-pick select:hover { border-color: var(--accent); }
 
 #stage {
   flex: 1; display: grid;

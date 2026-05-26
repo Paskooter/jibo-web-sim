@@ -21,6 +21,7 @@ var CHAT_RULE = {
     photo: ['take a photo', 'take a picture', 'say cheese'],
     routine: ['do a routine', 'do your thing', 'run a behavior tree'],
     flow: ['run a flow', 'do a flow', 'show me a flow'],
+    loop: ['who do you know', 'who is in your loop', 'your loop'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -100,6 +101,12 @@ jibo.init('face', function (err) {
       } else if (intent && score >= 0.5 && intent === 'flow') {
         jibo.tts.speak('Running a flow!', function () {
           jibo.flow.run('flows/greeting.flow', {}, function () {});
+        });
+      } else if (intent && score >= 0.5 && intent === 'loop') {
+        jibo.kb.loop.loadLoopActive(function (kbErr, users) {
+          var names = (users || []).map(function (u) { return u.getWrittenName(); });
+          var list = names.length ? names.join(' and ') : 'no one yet';
+          sayWithGesture('In my loop, I know ' + list + '.', 'nodYes');
         });
       } else if (intent && score >= 0.5 && intent === 'photo') {
         jibo.tts.speak('Say cheese!', function () {
