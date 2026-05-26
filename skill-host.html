@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jibo Skill Sandbox</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
+  body { width: 1280px; height: 720px; }
+</style>
+</head>
+<body>
+<!-- The jibo shim + eye are plain ES modules (no bare specifiers), so no
+     import map is needed in here. The skill itself is injected by boot.js. -->
+<script type="module" src="/src/skill-runtime/boot.js"></script>
+</body>
+</html>

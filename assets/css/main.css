@@ -47,6 +47,32 @@ body {
 }
 #viewport canvas { display: block; }
 
+/* Skill face iframe — positioned/transformed each frame by the face overlay. */
+#skill-iframe {
+  border: 0;
+  background: transparent;
+}
+
+/* TTS subtitle bar over the viewport. */
+#subtitle {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 8px 16px;
+  background: rgba(8, 11, 16, 0.78);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+#subtitle[hidden] { display: none; }
+
 #sidebar {
   background: var(--panel);
   border-left: 1px solid var(--border);
