@@ -19,7 +19,8 @@ export function createViewport(hostEl) {
   camera.position.copy(defaultCamPos);
   camera.lookAt(defaultLookAt);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // preserveDrawingBuffer lets jibo.lps.takePhoto read the canvas back anytime.
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(window.devicePixelRatio);
   hostEl.appendChild(renderer.domElement);

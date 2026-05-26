@@ -24,6 +24,7 @@ import { createAsrService } from './bridge/services/asr-service.js';
 import { createAnimationService } from './bridge/services/animation-service.js';
 import { createLpsService } from './bridge/services/lps-service.js';
 import { createNotificationsService } from './bridge/services/notifications-service.js';
+import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
 const SKILL_DIR = '/skills/hello-world';
@@ -69,6 +70,19 @@ viewportEl.appendChild(subtitleEl);
 function setSubtitle(text) {
   if (text) { subtitleEl.textContent = text; subtitleEl.hidden = false; }
   else { subtitleEl.hidden = true; }
+}
+
+// Photo thumbnail overlay — feedback when jibo.lps.takePhoto fires.
+const photoEl = document.createElement('img');
+photoEl.id = 'photo-thumb';
+photoEl.hidden = true;
+viewportEl.appendChild(photoEl);
+let photoTimer = 0;
+function showPhoto(dataUrl) {
+  photoEl.src = dataUrl;
+  photoEl.hidden = false;
+  clearTimeout(photoTimer);
+  photoTimer = setTimeout(() => { photoEl.hidden = true; }, 3500);
 }
 
 statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · loading model…`;
@@ -152,7 +166,34 @@ async function startSkillRuntime() {
 
   // jibo.lps + look-at: Jibo turns to track a target placed in the world.
   const lps = createLpsService({ emit: (event, data) => bridge.emit('lps', event, data) });
+
+  // jibo.media + jibo.lps.takePhoto: capture the viewport as a photo.
+  const media = createMediaService();
+  bridge.register('media', media.service);
+  lps.service.takePhoto = () => {
+    const dataUrl = viewport.renderer.domElement.toDataURL('image/png');
+    const photo = media.store(dataUrl);
+    showPhoto(dataUrl);
+    return { url: photo.url, id: photo.id };
+  };
   bridge.register('lps', lps.service);
+
+  // Screen touch: a tap (not a drag) that hits the face quad becomes a touch
+  // event at face pixel coords. Coexists with OrbitControls (drags rotate).
+  const tapRay = new THREE.Raycaster();
+  const dom = viewport.renderer.domElement;
+  let downX = 0, downY = 0, downT = 0;
+  dom.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; downT = performance.now(); });
+  dom.addEventListener('pointerup', (e) => {
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6 || performance.now() - downT > 350) return;
+    const r = dom.getBoundingClientRect();
+    tapRay.setFromCamera(new THREE.Vector2(
+      ((e.clientX - r.left) / r.width) * 2 - 1,
+      -((e.clientY - r.top) / r.height) * 2 + 1,
+    ), viewport.camera);
+    const hit = tapRay.intersectObject(screenMesh, false)[0];
+    if (hit && hit.uv) bridge.emit('face', 'touch', { x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 });
+  });
 
   const marker = new THREE.Mesh(
     new THREE.SphereGeometry(0.018, 20, 16),

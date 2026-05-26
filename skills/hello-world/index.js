@@ -18,6 +18,7 @@ var CHAT_RULE = {
     look: ['look around', 'look', 'what do you see'],
     beep: ['beep', 'make a sound', 'play a sound'],
     notify: ['notify me', 'remind me', 'send a notification'],
+    photo: ['take a photo', 'take a picture', 'say cheese'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -57,6 +58,12 @@ jibo.init('face', function (err) {
     });
   }, 700);
 
+  // React when someone taps Jibo's screen.
+  jibo.face.gestures.addStageGesture('tap', function () {
+    jibo.sound.play('bleep');
+    sayWithGesture('Hee hee, that tickles!', 'happy');
+  });
+
   // Listen for recognized speech, interpret it, and reply with a gesture.
   jibo.asr.on('speech', function (e) {
     if (!e || !e.final) return;
@@ -71,6 +78,12 @@ jibo.init('face', function (err) {
           type: 'message', title: 'Reminder', description: 'You asked me to remind you!',
         });
         sayWithGesture("Okay, I've sent you a notification.", 'nodYes');
+      } else if (intent && score >= 0.5 && intent === 'photo') {
+        jibo.tts.speak('Say cheese!', function () {
+          jibo.lps.takePhoto(null, true, jibo.lps.CameraID.LEFT, jibo.lps.PhotoType.FULL, function (err) {
+            if (!err) jibo.sound.play('bleep');
+          });
+        });
       } else if (intent && score >= 0.5 && RESPONSES[intent]) {
         sayWithGesture(RESPONSES[intent][0], RESPONSES[intent][1]);
       } else {

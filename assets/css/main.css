@@ -353,3 +353,17 @@ body {
 .notif-battery { background: #DE442F; border: 2px solid #FF4E36; }
 .notif-alarm   { background: #DE7400; border: 2px solid #FF8500; }
 .notif-twitter { background: #338CDC; border: 2px solid #3BA2FF; }
+
+/* Photo capture thumbnail */
+#photo-thumb {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 200px;
+  border: 3px solid #fff;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  pointer-events: none;
+}
+#photo-thumb[hidden] { display: none; }

@@ -81,6 +81,30 @@ export function installJiboShim() {
   on('face', 'color', (d) => { if (eye) eye.setColor(d.hex); });
   on('face', 'blink', () => { if (eye) eye.blink(); });
 
+  // Screen touch (host raycasts a tap on the face) -> face gestures + reaction.
+  const gestureHandlers = [];
+  on('face', 'touch', (d) => {
+    if (eye) { eye.lookAt((d.x / 1280 - 0.5) * 2, (d.y / 720 - 0.5) * 2); eye.blink(); }
+    const ev = { type: 'tap', center: { x: d.x, y: d.y } };
+    for (const h of gestureHandlers.slice()) if (h.type === 'tap') h.cb(ev);
+  });
+  // jibo.face.gestures.addStageGesture(displayObject, hammerType, opts, cb).
+  // Accepts (type, cb) too; Hammer types are normalized to a string.
+  const gestures = {
+    addStageGesture(target, type, opts, cb) {
+      if (typeof target === 'function') { cb = target; type = 'tap'; }
+      else if (typeof target === 'string' && typeof type === 'function') { cb = type; type = target; }
+      const name = typeof type === 'string' ? type.toLowerCase() : 'tap';
+      const handle = { type: name.indexOf('tap') >= 0 || name === 'press' ? 'tap' : name, cb };
+      gestureHandlers.push(handle);
+      return handle;
+    },
+    removeStageGesture(handle) {
+      const i = gestureHandlers.indexOf(handle);
+      if (i >= 0) gestureHandlers.splice(i, 1);
+    },
+  };
+
   const tts = {
     speak(text, options, cb) {
       if (typeof options === 'function') { cb = options; options = undefined; }
@@ -136,15 +160,60 @@ export function installJiboShim() {
       if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
       return p;
     },
+    CameraID: { LEFT: 0, RIGHT: 1 },
+    PhotoType: { FULL: 'full', THUMBNAIL: 'thumbnail' },
+    // takePhoto(photoRes, noDistort, cameraID, photoType, callback) -> url
+    takePhoto(photoRes, noDistort, cameraID, photoType, callback) {
+      const args = [photoRes, noDistort, cameraID, photoType].filter((a) => typeof a !== 'function');
+      const cb = [photoRes, noDistort, cameraID, photoType, callback].find((a) => typeof a === 'function');
+      const p = rawCall('lps', 'takePhoto', args);
+      if (cb) { p.then((r) => cb(null, r.url), (e) => cb(String(e))); return; }
+      return p;
+    },
   };
 
   // The face/eye renders locally in this iframe (no bridge round-trip needed).
   const face = {
     get eye() { return eye; },
+    gestures,
     lookAt(x, y) { if (eye) eye.lookAt(x, y); },
     lookForward() { if (eye) eye.lookAt(0, 0); },
     blink() { if (eye) eye.blink(); },
     setColor(hex) { if (eye) eye.setColor(hex); },
+  };
+
+  // jibo.media — photo storage (callback/promise; bridged to the host).
+  const media = {
+    getUrlById(id, cb) {
+      const p = rawCall('media', 'getUrlById', [id]);
+      if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
+      return p;
+    },
+    getPhoto(id, cb) {
+      const p = rawCall('media', 'getPhoto', [id]);
+      if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
+      return p;
+    },
+  };
+
+  // jibo.system — device info. Static mock values in the web sim.
+  const system = {
+    pluggedIn: true,
+    batteryCharging: true,
+    batteryChargeRate: 0,
+    inputEnergy: { ts: [0, 0], db_rms: -90, db_high: -90, db_mid: -90, db_low: -90 },
+    getBatteryTemperature: () => 27,
+    getBatteryLevel: () => 100,
+    getSystemVoltage: () => 12.0,
+    getMainBoardTemperature: () => 40,
+    getCPUTemperature: () => 45,
+    getTouchState: () => ({ changed: [], pad_state: [false, false, false, false, false, false] }),
+    getFanSpeed: (cb) => cb && cb(null, 0),
+    getBacklight: (cb) => cb && cb(null, 100),
+    setBacklight: (v, cb) => cb && cb(null),
+    getMasterVolume: (cb) => cb && cb(null, 100),
+    setMasterVolume: (v, cb) => cb && cb(null),
+    index: (cb) => cb && cb(null),
   };
 
   // Keyframed body/LED/eye animation, played host-side on the rig.
@@ -190,6 +259,8 @@ export function installJiboShim() {
     animate,
     sound,
     notifications,
+    media,
+    system,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',
