@@ -11,6 +11,8 @@ import { installRigPanel } from './ui/rig-panel.js';
 import { installChatPanel } from './ui/chat-panel.js';
 import { installTtsPanel } from './ui/tts-panel.js';
 import { installLpsPanel } from './ui/lps-panel.js';
+import { installAudioPanel } from './ui/audio-panel.js';
+import { createAudioEvent } from './viewport/audio-event.js';
 import { createHostBridge } from './bridge/host-bridge.js';
 import { createFaceOverlay } from './bridge/face-overlay.js';
 import { createSessionService } from './bridge/services/session-service.js';
@@ -37,11 +39,17 @@ installRigPanel(panelsEl.querySelector('[data-panel="rig"]'), viewport.rig);
 const chat = installChatPanel(panelsEl.querySelector('[data-panel="chat"]'));
 const ttsPanel = installTtsPanel(panelsEl.querySelector('[data-panel="tts"]'));
 
-// LPS target is set once the runtime is up; the panel delegates through this.
+// LPS target + audio events are wired once the runtime is up; the panels
+// delegate through these.
 let setActiveTarget = () => {};
+let fireAudioEvent = () => {};
 const lpsPanel = installLpsPanel(panelsEl.querySelector('[data-panel="lps"]'), {
   onSetTarget: (t) => setActiveTarget(t),
   onPlacementMode: (on) => viewport.setPlacement(on ? (pt) => setActiveTarget(pt) : null),
+});
+installAudioPanel(panelsEl.querySelector('[data-panel="audio"]'), {
+  onFire: (t) => fireAudioEvent(t),
+  onPlacementMode: (on) => viewport.setPlacement(on ? (pt) => fireAudioEvent(pt) : null),
 });
 
 // Subtitle bar over the viewport (TTS output).
@@ -147,14 +155,46 @@ async function startSkillRuntime() {
   lookat.calibrate();
   viewport.onFrame(lookat.update);
 
+  // Attention = a transient audio glance, else the persistent LPS target.
+  let lpsTarget = null;
+  let audioAttention = null;
+  const applyAttention = () => lookat.setTarget(audioAttention || lpsTarget);
+
   setActiveTarget = (pt) => {
-    const t = pt ? { x: pt.x, y: pt.y, z: pt.z } : null;
-    lps.setTarget(t);
-    lookat.setTarget(t);
-    marker.visible = !!t;
-    if (t) marker.position.set(t.x, t.y, t.z);
-    lpsPanel.showTarget(t);
+    lpsTarget = pt ? { x: pt.x, y: pt.y, z: pt.z } : null;
+    lps.setTarget(lpsTarget);
+    marker.visible = !!lpsTarget;
+    if (lpsTarget) marker.position.set(lpsTarget.x, lpsTarget.y, lpsTarget.z);
+    lpsPanel.showTarget(lpsTarget);
+    applyAttention();
   };
+
+  // Audio events: spawn a ping, glance toward it, notify the skill, then revert.
+  const audioViz = [];
+  let audioTimer = 0;
+  fireAudioEvent = (pt) => {
+    const entity = {
+      id: 'a' + Math.floor(performance.now()), name: 'sound', type: 'audio',
+      position: { x: pt.x, y: pt.y, z: pt.z }, confidence: 100,
+    };
+    lps.fireAudioEvent(entity);
+    audioViz.push(createAudioEvent(viewport.scene, pt));
+    audioAttention = { x: pt.x, y: pt.y, z: pt.z };
+    applyAttention();
+    clearTimeout(audioTimer);
+    audioTimer = setTimeout(() => {
+      audioAttention = null;
+      lps.clearAudioEvent(entity);
+      applyAttention();
+    }, 1600);
+  };
+  viewport.onFrame(() => {
+    if (!audioViz.length) return;
+    const now = performance.now();
+    for (let i = audioViz.length - 1; i >= 0; i--) {
+      if (!audioViz[i].update(now)) { audioViz[i].dispose(); audioViz.splice(i, 1); }
+    }
+  });
 
   const overlay = createFaceOverlay({
     viewportEl,

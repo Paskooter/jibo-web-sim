@@ -118,6 +118,11 @@ export function installJiboShim() {
       if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
       return p;
     },
+    getClosestAudibleEntity(cb) {
+      const p = rawCall('lps', 'getClosestAudibleEntity', []);
+      if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
+      return p;
+    },
   };
 
   // The face/eye renders locally in this iframe (no bridge round-trip needed).
