@@ -14,7 +14,8 @@ export async function loadSkillManifest(baseDir) {
   const main = j.main || pkg.main || 'index.html';
   return {
     dir,
-    entry: `${dir}/${main}`,                                   // iframe src
+    main,                                                      // entry filename
+    entry: `${dir}/${main}`,
     name: j['display-name'] || pkg.name || 'skill',
     version: pkg.version || '0.0.0',
     prompt: j.prompt || '',

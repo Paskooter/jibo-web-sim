@@ -17,6 +17,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Dev-only: serve external skill bundles for in-place compatibility testing
+// (e.g. the original jibo-be), kept OUT of the repo. Point EXTERNAL_SKILLS at a
+// directory of unpacked bundles; defaults to /tmp.
+const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
+app.use('/external-skills', express.static(EXTERNAL_SKILLS, { extensions: ['html'] }));
+
 app.use(express.static(__dirname, { extensions: ['html'] }));
 
 app.listen(PORT, HOST, () => {

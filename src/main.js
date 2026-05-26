@@ -27,7 +27,7 @@ import { createNotificationsService } from './bridge/services/notifications-serv
 import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
-const SKILLS = ['/skills/hello-world', '/skills/fortune-teller'];
+const SKILLS = ['/skills/hello-world', '/skills/fortune-teller', '/external-skills/jibo-be'];
 let switchSkill = () => {};   // assigned once the runtime is up
 
 const viewportEl = document.getElementById('viewport');
@@ -283,10 +283,12 @@ async function startSkillRuntime() {
   async function applySkill(dir) {
     try {
       const skill = await loadSkillManifest(dir);
-      statusEl.textContent = `M11 · ${skill.name} v${skill.version} · three.js r${viewport.threeRevision}`;
+      statusEl.textContent = `${skill.name} v${skill.version} · three.js r${viewport.threeRevision}`;
       chat.setPlaceholder(skill.prompt ? `${skill.prompt}…` : 'Say something to Jibo…');
       setActiveTarget(null);              // drop any look-at when switching skills
-      iframe.src = skill.entry;
+      // The in-place loader (skill-host.html) sets up jibo + require, then runs
+      // the bundle's own index.html unmodified.
+      iframe.src = `/skill-host.html?dir=${encodeURIComponent(skill.dir)}&entry=${encodeURIComponent(skill.main)}`;
       if (skillPicker.value !== dir) skillPicker.value = dir;
     } catch (err) {
       console.error('skill load failed:', err);

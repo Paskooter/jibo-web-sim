@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jibo Skill Sandbox</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { width: 1280px; height: 720px; }
+</style>
+</head>
+<body>
+<!-- The in-place loader: installs the jibo runtime + CommonJS require, then
+     fetches and runs the selected skill bundle's own index.html unmodified.
+     The skill dir + entry come from the iframe src query (?dir=…&entry=…). -->
+<script type="module" src="/src/skill-runtime/boot.js"></script>
+</body>
+</html>

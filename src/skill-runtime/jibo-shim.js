@@ -60,6 +60,23 @@ window.addEventListener('message', (ev) => {
   }
 });
 
+// A callable, infinitely-chainable no-op — lets original bundles touch runtime
+// namespaces we don't implement (jibo.action, jibo.embodied, jibo.gl, …)
+// without throwing, so they can load and degrade rather than crash.
+function tolerantStub() {
+  const fn = function () {};
+  return new Proxy(fn, {
+    get(target, prop) {
+      if (prop === 'then') return undefined;                 // not a thenable
+      if (prop === Symbol.toPrimitive || prop === 'toString' || prop === 'valueOf') return () => '';
+      if (prop in target) return target[prop];
+      return tolerantStub();
+    },
+    apply() { return undefined; },
+    construct() { return {}; },
+  });
+}
+
 export function installJiboShim() {
   let eye = null;
   let session = null;
@@ -364,6 +381,13 @@ export function installJiboShim() {
   // Behavior trees + flows run client-side; their leaves call the services above.
   jibo.bt = createBt(jibo);
   jibo.flow = createFlow(jibo);
+
+  // Runtime namespaces the web sim doesn't implement (mostly be-framework /
+  // privileged surfaces used by system bundles). Tolerant stubs so bundles load.
+  for (const ns of ['debug', 'action', 'embodied', 'expression', 'skills', 'globalEvents',
+    'systemManager', 'performance', 'errors', 'secureTransferService', 'gl', 'rendering', 'animUtils']) {
+    if (!(ns in jibo)) jibo[ns] = tolerantStub();
+  }
 
   // Announce readiness so the host flushes any queued events to us.
   parent.postMessage({ __jibo: true, kind: 'hello' }, '*');
