@@ -13,6 +13,7 @@
 // matching the original overloaded signatures.
 
 import { createEye } from './face-eye.js';
+import { createSound } from './sound.js';
 
 let nextId = 1;
 const pendingCalls = new Map();          // id -> { resolve, reject }
@@ -58,6 +59,18 @@ window.addEventListener('message', (ev) => {
 export function installJiboShim() {
   let eye = null;
   let session = null;
+  const sound = createSound();   // client-side audio, local to the iframe
+
+  // notifications: skill creates them; the host shows the banner.
+  const notifications = {
+    create(note, cb) {
+      const p = rawCall('notifications', 'create', [note]);
+      if (cb) { p.then(() => cb(), (e) => cb(e)); return; }
+      return p;
+    },
+    on: (event, fn) => on('notifications', event, fn),
+    off: (event, fn) => off('notifications', event, fn),
+  };
 
   // TTS start/stop events drive the talking animation on the eye.
   on('tts', 'start', () => { if (eye) eye.setTalking(true); });
@@ -175,6 +188,8 @@ export function installJiboShim() {
     lps,
     face,
     animate,
+    sound,
+    notifications,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',

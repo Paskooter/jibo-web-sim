@@ -12,6 +12,8 @@ import { installChatPanel } from './ui/chat-panel.js';
 import { installTtsPanel } from './ui/tts-panel.js';
 import { installLpsPanel } from './ui/lps-panel.js';
 import { installAudioPanel } from './ui/audio-panel.js';
+import { installNotificationsPanel } from './ui/notifications-panel.js';
+import { createNotificationBanner } from './ui/notification-banner.js';
 import { createAudioEvent } from './viewport/audio-event.js';
 import { createHostBridge } from './bridge/host-bridge.js';
 import { createFaceOverlay } from './bridge/face-overlay.js';
@@ -21,6 +23,7 @@ import { createNluService } from './bridge/services/nlu-service.js';
 import { createAsrService } from './bridge/services/asr-service.js';
 import { createAnimationService } from './bridge/services/animation-service.js';
 import { createLpsService } from './bridge/services/lps-service.js';
+import { createNotificationsService } from './bridge/services/notifications-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
 const SKILL_DIR = '/skills/hello-world';
@@ -50,6 +53,12 @@ const lpsPanel = installLpsPanel(panelsEl.querySelector('[data-panel="lps"]'), {
 installAudioPanel(panelsEl.querySelector('[data-panel="audio"]'), {
   onFire: (t) => fireAudioEvent(t),
   onPlacementMode: (on) => viewport.setPlacement(on ? (pt) => fireAudioEvent(pt) : null),
+});
+
+let pushNotification = () => {};
+const notificationBanner = createNotificationBanner(viewportEl);
+installNotificationsPanel(panelsEl.querySelector('[data-panel="notes"]'), {
+  onPush: (n) => pushNotification(n),
 });
 
 // Subtitle bar over the viewport (TTS output).
@@ -119,6 +128,13 @@ async function startSkillRuntime() {
     },
   }));
   bridge.register('nlu', createNluService());
+
+  const notifications = createNotificationsService({
+    emit: (event, data) => bridge.emit('notifications', event, data),
+    onShow: (n) => notificationBanner.show(n),
+  });
+  bridge.register('notifications', notifications.service);
+  pushNotification = notifications.push;
 
   // The Chat tab's input is delivered to the skill as recognized speech.
   // (Real wake-word/speech-to-text is shelved; Chat is the text stand-in.)

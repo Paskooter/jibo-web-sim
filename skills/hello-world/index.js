@@ -16,6 +16,8 @@ var CHAT_RULE = {
     capabilities: ['what can you do', 'help'],
     dance: ['dance', 'do a dance', 'show me a move'],
     look: ['look around', 'look', 'what do you see'],
+    beep: ['beep', 'make a sound', 'play a sound'],
+    notify: ['notify me', 'remind me', 'send a notification'],
     bye: ['goodbye', 'bye', 'see you later'],
   },
 };
@@ -43,7 +45,12 @@ jibo.init('face', function (err) {
   jibo.face.setColor('#4ec9ff');
   jibo.face.lookForward();
 
+  // Register Jibo's sound effects (resolved relative to this bundle).
+  jibo.sound.add('hello', 'audio/FX_Bawhoop.mp3');
+  jibo.sound.add('bleep', 'audio/FX_Bleep.mp3');
+
   setTimeout(function () {
+    jibo.sound.play('hello');
     sayWithGesture("Hello! I'm Jibo, running entirely in your browser.", 'greeting', function () {
       jibo.face.blink();
       jibo.tts.speak("Type something in the Chat tab and I'll do my best to respond.");
@@ -56,9 +63,16 @@ jibo.init('face', function (err) {
     jibo.nlu.parseFromRule(CHAT_RULE, e.words, function (nluErr, res) {
       var intent = !nluErr && res && res.NLParse ? res.NLParse.intent : null;
       var score = res ? res.heuristic_score : 0;
-      var match = (intent && score >= 0.5) ? RESPONSES[intent] : null;
-      if (match) {
-        sayWithGesture(match[0], match[1]);
+      if (intent && score >= 0.5 && intent === 'beep') {
+        jibo.sound.play('bleep');
+        sayWithGesture('Beep boop!', 'happy');
+      } else if (intent && score >= 0.5 && intent === 'notify') {
+        jibo.notifications.create({
+          type: 'message', title: 'Reminder', description: 'You asked me to remind you!',
+        });
+        sayWithGesture("Okay, I've sent you a notification.", 'nodYes');
+      } else if (intent && score >= 0.5 && RESPONSES[intent]) {
+        sayWithGesture(RESPONSES[intent][0], RESPONSES[intent][1]);
       } else {
         jibo.animate.play('nodYes');
         jibo.tts.speak("Hmm, I'm not sure I understood that — but I'm still learning!");

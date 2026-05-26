@@ -328,3 +328,28 @@ body {
   padding: 8px; cursor: pointer; font-size: 12px;
 }
 .audio-grid button:hover { border-color: var(--accent); }
+
+/* Notification banner over the viewport */
+#notification-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  width: 300px;
+  margin-left: -150px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transform: translateY(-160%);
+  transition: transform 250ms ease;
+  pointer-events: none;
+  z-index: 10;
+}
+#notification-banner.show { transform: translateY(0); }
+#notification-banner[hidden] { display: none; }
+#notification-banner .notif-title { font-weight: 600; font-size: 14px; }
+#notification-banner .notif-desc { font-size: 12px; opacity: 0.92; margin-top: 2px; }
+.notif-message { background: #8B9B9C; border: 2px solid #9FB1B3; }
+.notif-battery { background: #DE442F; border: 2px solid #FF4E36; }
+.notif-alarm   { background: #DE7400; border: 2px solid #FF8500; }
+.notif-twitter { background: #338CDC; border: 2px solid #3BA2FF; }
