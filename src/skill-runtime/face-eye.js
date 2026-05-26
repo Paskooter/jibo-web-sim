@@ -97,6 +97,8 @@ export function createEye(parentEl, { width = 1280, height = 720 } = {}) {
     },
     blink() { if (blinkT < 0) blinkT = 0; },
     setTalking(v) { talking = !!v; },
+    setVisible(v) { canvas.style.display = v ? 'block' : 'none'; },
+    setScale(s) { canvas.style.transform = `scale(${s})`; canvas.style.transformOrigin = 'center'; },
     destroy() { cancelAnimationFrame(raf); canvas.remove(); },
   };
 }

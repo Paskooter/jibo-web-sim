@@ -220,6 +220,48 @@ export function createBt(jibo) {
     }
     stop() { clearTimeout(this._t); return Promise.resolve(); }
   }
+  // A ListenEmitter handed to onResult: carries the NLU parse + emits it.
+  function makeListenEmitter(result) {
+    const handlers = {};
+    const em = {
+      result,
+      on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return em; },
+      emit(ev, data) { (handlers[ev] || []).slice().forEach((f) => f(data)); return em; },
+    };
+    return em;
+  }
+  // Listen: recognized speech (from jibo.asr) parsed against an NLU rule.
+  class Listen extends AsyncLeaf {
+    begin() {
+      const rule = this.options.getRule ? this.options.getRule() : this.options.rule;
+      this._handler = (e) => {
+        if (!e || !e.final) return;
+        jibo.nlu.parseFromRule(rule, e.words, (err, res) => {
+          const listener = makeListenEmitter(res);
+          if (this.options.onResult) this.options.onResult(listener);
+          setTimeout(() => { listener.emit('top', res); listener.emit('final', res); }, 0);
+          this._done = Status.SUCCEEDED;
+        });
+      };
+      jibo.asr.on('speech', this._handler);
+    }
+    stop() { jibo.asr.off('speech', this._handler); return Promise.resolve(); }
+  }
+  // Run a nested behavior tree (behaviorPath is a function/node-map/Behavior).
+  class Subtree extends AsyncLeaf {
+    begin() {
+      const def = this.options.behaviorPath || this.options.getFileName;
+      this._tree = run(def, { notepad: this.options.getNotepad && this.options.getNotepad() }, (status) => {
+        if (this.options.onResult) this.options.onResult({ status });
+        this._done = Status.SUCCEEDED;
+      });
+    }
+    stop() { if (this._tree && this._tree._cancelRaf) this._tree._cancelRaf(); return Promise.resolve(); }
+  }
+  class ReadBarcode extends Behavior {   // no camera barcode in the sim
+    start() { if (this.options.onBarcode) this.options.onBarcode('barcode unsupported in web sim', null); return true; }
+    update() { return Status.SUCCEEDED; }
+  }
 
   // ---- decorators ----
   class TimeoutSucceed extends Decorator {
@@ -262,6 +304,44 @@ export function createBt(jibo) {
     start() { return this.options.conditional() ? true : Status.FAILED; }
     update(result) { return result; }
   }
+  // Succeed when recognized speech matches an NLU rule (Listen as a decorator).
+  class SucceedOnListen extends Decorator {
+    start() {
+      this._got = false;
+      const rule = this.options.getRule ? this.options.getRule() : this.options.rule;
+      this._handler = (e) => {
+        if (!e || !e.final) return;
+        jibo.nlu.parseFromRule(rule, e.words, (err, res) => {
+          const listener = makeListenEmitter(res);
+          if (this.options.onResult) this.options.onResult(listener);
+          setTimeout(() => { listener.emit('top', res); listener.emit('final', res); }, 0);
+          this._got = true;
+        });
+      };
+      jibo.asr.on('speech', this._handler);
+      return true;
+    }
+    update(result) { return this._got ? Status.SUCCEEDED : result; }
+    stop() { jibo.asr.off('speech', this._handler); return Promise.resolve(); }
+  }
+  class StartOnEvent extends Decorator {
+    start() {
+      this._em = this.options.emitter || (this.behavior && this.behavior.emitter);
+      this._ready = !this._em;
+      if (this._em) { this._h = (p) => { this._ready = true; if (this.options.onEvent) this.options.onEvent(p); }; this._em.on(this.options.eventName, this._h); }
+      return this._ready ? true : Status.WAIT;
+    }
+    update(result) { return result === Status.WAIT ? (this._ready ? Status.IN_PROGRESS : Status.WAIT) : result; }
+  }
+  class SucceedOnEvent extends Decorator {
+    start() {
+      this._got = false;
+      this._em = this.options.emitter || (this.behavior && this.behavior.emitter);
+      if (this._em) { this._h = (p) => { this._got = true; if (this.options.onEvent) this.options.onEvent(p); }; this._em.on(this.options.eventName, this._h); }
+      return true;
+    }
+    update(result) { return this._got ? Status.SUCCEEDED : result; }
+  }
 
   class BehaviorTree extends BehaviorEmitter {
     constructor(root) { super(); this.root = root; }
@@ -275,11 +355,13 @@ export function createBt(jibo) {
   const behaviors = {
     Sequence, Switch, Parallel, Random, Null, ExecuteScript, ExecuteScriptAsync,
     TextToSpeech, TextToSpeechJs: TextToSpeech, Blink, LookAt, PlayAnimation, PlayAudio,
-    TakePhoto, TimeoutJs,
+    TakePhoto, TimeoutJs, Listen, ListenJs: Listen, ListenEmbedded: Listen,
+    Subtree, SubtreeJs: Subtree, ReadBarcode,
   };
   const decorators = {
     TimeoutSucceed, TimeoutSucceedJs, TimeoutFail, SucceedOnCondition, FailOnCondition,
-    StartOnCondition, WhileCondition, Case,
+    StartOnCondition, WhileCondition, Case, SucceedOnListen, SucceedOnListenJs: SucceedOnListen,
+    StartOnEvent, SucceedOnEvent,
   };
 
   // registry for register()/Factory

@@ -17,6 +17,7 @@ import { createSound } from './sound.js';
 import { createBt } from './bt.js';
 import { createFlow } from './flow.js';
 import { createKb } from './kb.js';
+import { createTimer, createUtils, createLoader, createLifecycle, createVersions } from './runtime-extras.js';
 
 let nextId = 1;
 const pendingCalls = new Map();          // id -> { resolve, reject }
@@ -62,8 +63,14 @@ window.addEventListener('message', (ev) => {
 export function installJiboShim() {
   let eye = null;
   let session = null;
+  let talking = false;
   const sound = createSound();   // client-side audio, local to the iframe
   const kb = createKb();         // knowledge base + loop, local to the iframe
+  const timer = createTimer();   // 'update' heartbeat
+  const utils = createUtils();   // DelayedCall, PathUtils
+  const loader = createLoader(sound);
+  const lifecycle = createLifecycle();
+  const versions = createVersions();
 
   // notifications: skill creates them; the host shows the banner.
   const notifications = {
@@ -77,8 +84,8 @@ export function installJiboShim() {
   };
 
   // TTS start/stop events drive the talking animation on the eye.
-  on('tts', 'start', () => { if (eye) eye.setTalking(true); });
-  on('tts', 'stop', () => { if (eye) eye.setTalking(false); });
+  on('tts', 'start', () => { talking = true; if (eye) eye.setTalking(true); });
+  on('tts', 'stop', () => { talking = false; if (eye) eye.setTalking(false); });
 
   // 'face' events let the host (animation playback) drive the eye.
   on('face', 'look', (d) => { if (eye) eye.lookAt(d.x, d.y); });
@@ -123,6 +130,20 @@ export function installJiboShim() {
     },
     on: (event, fn) => on('tts', event, fn),
     off: (event, fn) => off('tts', event, fn),
+    get isTalking() { return talking; },
+    isInitialized: true,
+    TTSEvents: { WORD: 'word', PHONE: 'phone', STOP: 'stop', EFFECT: 'effect', ANALYSIS: 'analysis' },
+    TTSMode: { SSML: 'ssml', TEXT: 'text' },
+    getWordTimings(text, options, cb) {
+      if (typeof options === 'function') { cb = options; options = undefined; }
+      const words = String(text).trim().split(/\s+/).filter(Boolean);
+      let t = 0;
+      const tokens = words.map((w) => { const start = t; t += 0.36; return { name: w, start, end: t }; });
+      const result = { tokentimes: { tokens } };
+      if (cb) { cb(null, result); return undefined; }
+      return Promise.resolve(result);
+    },
+    startEffect() {}, stopEffect() {}, updateEffect() {},
   };
 
   const nlu = {
@@ -198,6 +219,15 @@ export function installJiboShim() {
       if (cb) { p.then((r) => cb(null, r), (e) => cb(e)); return; }
       return p;
     },
+    storePhoto(buffer, thumbnails, cb) {
+      const result = { id: `photo-${Date.now()}`, thumbnails: {} };
+      if (cb) { cb(null, result); return undefined; }
+      return Promise.resolve(result);
+    },
+    recording: null,
+    startRecording(options, cb) { if (cb) cb(new Error('recording not supported in web sim')); },
+    stopRecording(cb) { if (cb) cb(null); },
+    playRecording(options, cb) { if (cb) cb(null); },
   };
 
   // jibo.system — device info. Static mock values in the web sim.
@@ -255,6 +285,31 @@ export function installJiboShim() {
         on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return this; },
       };
     },
+    // Spec-shaped animation builder; .play() returns an instance you can listen
+    // to. The uri is an animation name/path passed to play().
+    createAnimationBuilder(uri, cb) {
+      const builder = {
+        setConfig() { return this; },
+        play() {
+          const handlers = {};
+          const instance = {
+            on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return instance; },
+            stop() { rawCall('animate', 'stop', []); },
+          };
+          rawCall('animate', 'play', [uri]).then(() => (handlers.STOPPED || []).forEach((f) => f()));
+          return instance;
+        },
+      };
+      if (cb) { cb(null, builder); return undefined; }
+      return builder;
+    },
+    setEyeVisible(v) { if (eye && eye.setVisible) eye.setVisible(v); },
+    setEyeScale(s) { if (eye && eye.setScale) eye.setScale(s); },
+    getRobotInfo() { return { dofs: ['bottomSection_r', 'middleSection_r', 'topSection_r'] }; },
+    getClock() { return { now: () => performance.now() / 1000 }; },
+    dofs: { ALL: 'all', BASE: 'base', BODY: 'body', EYE: 'eye', LED: 'led', OVERLAY: 'overlay', SCREEN: 'screen' },
+    AnimationEventType: { STARTED: 'STARTED', STOPPED: 'STOPPED', CANCELLED: 'CANCELLED', EVENT: 'EVENT' },
+    LookatEventType: { STARTED: 'STARTED', TARGET_REACHED: 'TARGET_REACHED', TARGET_SUPERSEDED: 'TARGET_SUPERSEDED', STOPPED: 'STOPPED', CANCELLED: 'CANCELLED' },
   };
 
   function resolveDisplay(arg) {
@@ -286,6 +341,11 @@ export function installJiboShim() {
     media,
     system,
     kb,
+    timer,
+    utils,
+    loader,
+    lifecycle,
+    versions,
     RunMode: { SIMULATOR: 'simulator', REMOTELY: 'remotely', ON_ROBOT: 'on-robot', UNIT_TESTS: 'unit-tests' },
     get runMode() { return session ? session.runMode : 'simulator'; },
     version: '0.0.0-websim',
