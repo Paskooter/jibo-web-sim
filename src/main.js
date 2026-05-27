@@ -156,6 +156,34 @@ async function startSkillRuntime() {
   iframe.style.pointerEvents = 'none';   // let OrbitControls own the viewport
   viewportEl.appendChild(iframe);
 
+  // Real-runtime skills (jibo-be) speak via SpeechSynthesis in THIS window — the
+  // skill iframe is sandboxed so speech there is silent. The skill posts
+  // {kind:'speak', id, text}; we utter it and post {kind:'speak-done', id} back
+  // when it ends so the skill paces to real speech. Keep utterance refs alive to
+  // dodge the Chromium GC-cancels-speech bug.
+  const synth = window.speechSynthesis;
+  const liveUtters = new Set();
+  window.addEventListener('message', (ev) => {
+    const m = ev.data;
+    if (!m || m.__jibo !== true) return;
+    if (m.kind === 'speak') {
+      const reply = () => { try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'speak-done', id: m.id }, '*'); } catch (_) { /* gone */ } };
+      if (!synth || typeof window.SpeechSynthesisUtterance !== 'function' || !m.text) { reply(); return; }
+      try {
+        const u = new SpeechSynthesisUtterance(m.text);
+        u.rate = 1.0;
+        u.pitch = 1.15; // a touch higher — closer to Jibo's voice character
+        liveUtters.add(u);
+        const done = () => { liveUtters.delete(u); reply(); };
+        u.onend = done;
+        u.onerror = done;
+        synth.speak(u);
+      } catch (_) { reply(); }
+    } else if (m.kind === 'speak-stop' && synth) {
+      try { synth.cancel(); } catch (_) { /* nothing speaking */ }
+    }
+  });
+
   // Host bridge + services. Create the bridge (starts listening) before
   // pointing the iframe at the skill host, so we catch its 'hello'.
   const bridge = createHostBridge(iframe);

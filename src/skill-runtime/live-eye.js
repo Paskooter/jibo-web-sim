@@ -203,36 +203,40 @@ export function installWebSpeech(jibo) {
   try {
     const sp = jibo && jibo.embodied && jibo.embodied.speech;
     if (!sp || sp.__webspeech) return;
-    const synth = (typeof window !== 'undefined') && window.speechSynthesis;
-    if (!synth || typeof window.SpeechSynthesisUtterance !== 'function') return;
     sp.__webspeech = true;
+
+    // Speech runs in the HOST window, not here: the skill iframe is sandboxed, so
+    // SpeechSynthesis there has no user activation and stays silent. We post the
+    // text to the host (main.js), which speaks it and posts 'speak-done' back when
+    // it finishes so the skill paces to real speech. A generous length-based
+    // fallback resolves if the host never replies (so a skill never hangs).
+    let seq = 0;
+    const pending = new Map();
+    window.addEventListener('message', (ev) => {
+      const m = ev.data;
+      if (m && m.__jibo === true && m.kind === 'speak-done' && pending.has(m.id)) {
+        const fin = pending.get(m.id); pending.delete(m.id); fin();
+      }
+    });
 
     sp.speak = function speak(text, _options, _autoRuleConfig) {
       const plain = String(text == null ? '' : text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
       return new Promise((resolve) => {
         if (!plain) { resolve(); return; }
+        const id = ++seq;
         let done = false;
-        const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
-        // ~13 chars/sec of speech + a small base; also a hard cap. This both paces
-        // headless runs (no 'end' event) and bounds runaway utterances.
+        const fin = () => { if (done) return; done = true; pending.delete(id); clearTimeout(timer); resolve(); };
+        pending.set(id, fin);
         const estMs = Math.min(30000, Math.max(900, plain.length * 75 + 700));
-        const timer = setTimeout(finish, estMs);
-        try {
-          const u = new window.SpeechSynthesisUtterance(plain);
-          u.rate = 1.0;
-          u.pitch = 1.15; // a touch higher — closer to Jibo's voice character
-          u.onend = finish;
-          u.onerror = finish;
-          synth.speak(u);
-        } catch (_) { finish(); }
+        const timer = setTimeout(fin, estMs + 4000); // safety net; the host's 'end' normally resolves first
+        try { parent.postMessage({ __jibo: true, kind: 'speak', id, text: plain }, '*'); } catch (_) { fin(); }
       });
     };
-    const ORIG_STOP = typeof sp.stop === 'function' ? sp.stop.bind(sp) : null;
-    sp.stop = function stop(...args) {
-      try { synth.cancel(); } catch (_) { /* nothing speaking */ }
-      return ORIG_STOP ? ORIG_STOP(...args) : Promise.resolve();
+    sp.stop = function stop() {
+      try { parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* no parent */ }
+      return Promise.resolve();
     };
-    console.log('[live-eye] Web Speech API wired to jibo.embodied.speech');
+    console.log('[live-eye] Web Speech routed to host window');
   } catch (e) { console.warn('[live-eye] installWebSpeech failed:', e.message); }
 }
 
@@ -247,9 +251,11 @@ export function connectCloud(requireFn) {
   if (!server) return;
   try {
     const js = requireFn('@jibo/jetstream-client');
-    if (!js || typeof js.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
+    // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
+    const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
+    if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
     console.log('[cloud] connecting jetstream to', `${server}:8090`);
-    Promise.resolve(js.init({ hostname: server, port: 8090 }))
+    Promise.resolve(api.init({ hostname: server, port: 8090 }))
       .then(() => console.log('[cloud] jetstream connected to', `${server}:8090`))
       .catch((e) => console.warn('[cloud] jetstream connect failed:', (e && e.message) || e));
   } catch (e) { console.warn('[cloud] jetstream init error:', e.message); }
