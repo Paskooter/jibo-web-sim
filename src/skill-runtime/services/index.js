@@ -21,8 +21,10 @@ function httpService(name, routes) {
     handle() { return undefined; },
     handleHttp(method, path) {
       const key = Object.keys(routes).find((re) => new RegExp(re).test(path));
-      const body = key ? routes[key] : {};
-      return { status: 200, body };
+      const v = key ? routes[key] : {};
+      // A route value may be a body, or {status, body} for non-200 (e.g. 204).
+      if (v && typeof v === 'object' && 'status' in v && 'body' in v) return v;
+      return { status: 200, body: v };
     },
   };
 }
@@ -48,6 +50,11 @@ const REAL_HTTP = {
   }),
   'secure-transfer': httpService('secure-transfer', {
     '/hasBackupData': { isReady: false },
+    '': {},
+  }),
+  // Body HTTP side (LED backlight / fan settings): POST /settings expects 204.
+  body: httpService('body', {
+    '/settings': { status: 204, body: '' },
     '': {},
   }),
 };
