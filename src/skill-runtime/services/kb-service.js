@@ -76,5 +76,20 @@ export function installKbService(requireFn) {
     if (s.rootId === id) s.rootId = null;
     if (cb) cb(null);
   };
+  // KB slice management (createSlice/existsSlice) is on the KnowledgeBase itself
+  // (axios to /create + /exists). Back it with the in-memory store.
+  const KB = kb.KnowledgeBase;
+  if (KB && KB.prototype && !KB.prototype.__kbStorePatched) {
+    KB.prototype.__kbStorePatched = true;
+    KB.prototype.createSlice = function createSlice(sliceName, httpUrl, cb) {
+      if (typeof httpUrl === 'function') cb = httpUrl;
+      storeFor(sliceName);
+      if (cb) cb(null, true);
+    };
+    KB.prototype.existsSlice = function existsSlice(sliceName, httpUrl, cb) {
+      if (typeof httpUrl === 'function') cb = httpUrl;
+      if (cb) cb(null, true); // slices are created on demand, so treat as existing
+    };
+  }
   console.log('[kb] in-memory KnowledgeBase installed');
 }

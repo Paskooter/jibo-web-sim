@@ -590,7 +590,10 @@ function makeBuiltins() {
     vm: {
       runInNewContext: (code, sandbox) => { const k = Object.keys(sandbox || {}); try { return new Function(...k, code)(...k.map((n) => sandbox[n])); } catch (_) { return undefined; } }, // eslint-disable-line no-new-func
       runInThisContext: (code) => (0, eval)(code), // eslint-disable-line no-eval
+      runInContext: (code, sandbox) => { const k = Object.keys(sandbox || {}); try { return new Function(...k, code)(...k.map((n) => sandbox[n])); } catch (_) { return undefined; } }, // eslint-disable-line no-new-func
       createContext: (o) => o || {},
+      isContext: () => true,
+      Script: function Script(code) { this.code = code; this.runInContext = (ctx) => { const k = Object.keys(ctx || {}); try { return new Function(...k, code)(...k.map((n) => ctx[n])); } catch (_) { return undefined; } }; this.runInNewContext = this.runInContext; this.runInThisContext = () => (0, eval)(code); }, // eslint-disable-line no-new-func, no-eval
     },
     domain: { create: () => ({ run: (f) => f(), on() {}, add() {}, enter() {}, exit() {}, dispose() {} }) },
     child_process: {}, cluster: {}, readline: {}, timers: { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: (f) => setTimeout(f, 0) },

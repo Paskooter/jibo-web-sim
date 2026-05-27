@@ -45,7 +45,7 @@ if (process.env.CLICK_EYE) {
   const [cx, cy] = (process.env.CLICK_EYE || '505,270').split(',').map(Number);
   await page.mouse.click(cx, cy).catch((e) => log.push(`[click] ${e.message}`));
   log.push(`[test] clicked eye at ${cx},${cy}`);
-  await new Promise((r) => setTimeout(r, 5000));
+  await new Promise((r) => setTimeout(r, Number(process.env.CLICK_WAIT || 5000)));
 }
 
 await page.screenshot({ path: shot }).catch((e) => log.push(`[shot] ${e.message}`));
