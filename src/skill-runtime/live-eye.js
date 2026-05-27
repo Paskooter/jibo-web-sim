@@ -191,6 +191,51 @@ export function installExpressionStubs(jibo, requireFn) {
   } catch (e) { console.warn('[live-eye] installExpressionStubs failed:', e.message); }
 }
 
+// Give Jibo a real voice with the browser's built-in Web Speech API. The original
+// TTS is a native C++ engine + ~680MB voice model (not browser-runnable), so the
+// embodied-dialog speak pipeline can only build timing/visemes offline, never
+// audio ("TTS Service is unavailable"). Replace jibo.embodied.speech.speak — the
+// MIM speakDelegate — with a SpeechSynthesis-backed speak: strip SSML to plain
+// text, utter it, and resolve when it ends so the skill paces to real speech. A
+// length-estimated fallback timer guarantees we resolve even when 'end' never
+// fires (headless/no audio device), so speaking skills never hang.
+export function installWebSpeech(jibo) {
+  try {
+    const sp = jibo && jibo.embodied && jibo.embodied.speech;
+    if (!sp || sp.__webspeech) return;
+    const synth = (typeof window !== 'undefined') && window.speechSynthesis;
+    if (!synth || typeof window.SpeechSynthesisUtterance !== 'function') return;
+    sp.__webspeech = true;
+
+    sp.speak = function speak(text, _options, _autoRuleConfig) {
+      const plain = String(text == null ? '' : text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return new Promise((resolve) => {
+        if (!plain) { resolve(); return; }
+        let done = false;
+        const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+        // ~13 chars/sec of speech + a small base; also a hard cap. This both paces
+        // headless runs (no 'end' event) and bounds runaway utterances.
+        const estMs = Math.min(30000, Math.max(900, plain.length * 75 + 700));
+        const timer = setTimeout(finish, estMs);
+        try {
+          const u = new window.SpeechSynthesisUtterance(plain);
+          u.rate = 1.0;
+          u.pitch = 1.15; // a touch higher — closer to Jibo's voice character
+          u.onend = finish;
+          u.onerror = finish;
+          synth.speak(u);
+        } catch (_) { finish(); }
+      });
+    };
+    const ORIG_STOP = typeof sp.stop === 'function' ? sp.stop.bind(sp) : null;
+    sp.stop = function stop(...args) {
+      try { synth.cancel(); } catch (_) { /* nothing speaking */ }
+      return ORIG_STOP ? ORIG_STOP(...args) : Promise.resolve();
+    };
+    console.log('[live-eye] Web Speech API wired to jibo.embodied.speech');
+  } catch (e) { console.warn('[live-eye] installWebSpeech failed:', e.message); }
+}
+
 // Some service clients initialize internal state (loggers, data converters) in an
 // init() that UNIT_TESTS skips, then crash later when used (e.g. the analytics
 // path logEvent -> getActiveSpeaker -> DataConverter.mostRecentSpeaker on an
