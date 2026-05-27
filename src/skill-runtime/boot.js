@@ -100,7 +100,7 @@ async function bootReal() {
         try { if (window.__serviceBus) v.records = window.__serviceBus.records(); } catch (e) { console.warn('[boot] records:', e.message); }
         try { installKbService(req); } catch (e) { console.warn('[boot] kb service:', e.message); }
         if (eye) populateExpressionDofs(v, eye.robotInfo);
-        installExpressionStubs(v);
+        installExpressionStubs(v, req);
         initOfflineServices(v, req);
       }
     },

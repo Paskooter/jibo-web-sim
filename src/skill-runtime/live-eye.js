@@ -93,17 +93,71 @@ function tolerant() {
   });
 }
 
+// A minimal event emitter matching jibo-typed-events' Event surface (on/once/
+// emit/off). Prefer the real class so the API is exact; fall back if unavailable.
+function makeEmitter(Event, name) {
+  if (Event) { try { return new Event(name); } catch (_) { /* fall through */ } }
+  const hs = new Set();
+  return {
+    on(h) { hs.add(h); return h; },
+    once(h) { const w = (...a) => { hs.delete(w); return h(...a); }; hs.add(w); return w; },
+    off(h) { hs.delete(h); },
+    removeListener(h) { hs.delete(h); },
+    add(h) { hs.add(h); return h; },
+    remove(h) { hs.delete(h); },
+    emit(d) { for (const h of [...hs]) { try { h(d); } catch (_) { /* handler threw */ } } },
+  };
+}
+
+// A stand-in for a jibo-expression-client AnimationInstance. The real one carries
+// `.events` (an AnimationEvents container of jibo-typed-events Events) that the
+// runtime + jibo-anim-db subscribe to (instance.events.{stopped,cancelled,…}.on).
+// A plain tolerant() proxy can't serve these — its lifecycle special-casing makes
+// `.events.cancelled` a Promise, so `.on`/`.once` aren't functions and the eye
+// animation path throws. Give `.events` REAL emitters; everything else stays
+// tolerant. On a play, fire `started` then `stopped` (next tick) so the playback's
+// completion promise resolves and the skill proceeds instead of awaiting forever.
+function makeAnimInstance(requireFn, play) {
+  let Event;
+  try { Event = requireFn('jibo-typed-events').Event; } catch (_) { /* fall back to local emitter */ }
+  const events = {};
+  for (const n of ['general', 'audio', 'pixi', 'holdSafe', 'stopped', 'cancelled', 'rejected', 'started', 'stateChange']) {
+    events[n] = makeEmitter(Event, n);
+  }
+  if (play) {
+    Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
+    // Complete on the next macrotask so the local KeysAnimation gets a render
+    // window, then resolves the playback (no real DOF arbiter to end it for us).
+    setTimeout(() => { try { events.stopped.emit(); } catch (_) { /* no listener */ } }, 0);
+  }
+  const fn = function () { return tolerant(); };
+  return new Proxy(fn, {
+    get(t, p) {
+      if (p === 'events') return events;
+      if (p === 'state') return 'INVALID';
+      if (p === 'then' || typeof p === 'symbol') return undefined;
+      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { try { events.stopped.emit(); } catch (_) { /* none */ } return tolerant(); };
+      if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
+      return tolerant();
+    },
+    apply() { return tolerant(); },
+    construct() { return tolerant(); },
+  });
+}
+
 // The expression-service RPC methods route through a RemoteClient that never
 // connects offline (UNIT_TESTS), so calls throw on `_client.send`. We drive the
 // eye locally instead, so replace those methods with resolving local no-ops and
 // make the events/feature surface tolerant — letting jibo-be's boot proceed.
+// createAnimation/createAndPlayAnimation return a real-enough AnimationInstance
+// (above) so the eye-animation path (KeysAnimation/jibo-anim-db) works.
 const EXPRESSION_METHODS = [
-  'createAnimation', 'createAndPlayAnimation', 'destroyCaches', 'acquireTarget',
+  'destroyCaches', 'acquireTarget',
   'setAttentionMode', 'pushAttentionMode', 'popAttentionMode', 'getAttentionMode',
   'setLEDColor', 'awaitFace', 'centerRobot', 'cleanup', 'indexRobot', 'setSkillRoot',
   'blink', 'doCenterRobotOnDisconnect', 'lookAt', 'subscribe', 'unsubscribe',
 ];
-export function installExpressionStubs(jibo) {
+export function installExpressionStubs(jibo, requireFn) {
   try {
     const ex = jibo && jibo.expression;
     if (!ex || ex.__stubbed) return;
@@ -111,6 +165,8 @@ export function installExpressionStubs(jibo) {
     for (const m of EXPRESSION_METHODS) {
       if (typeof ex[m] === 'function' || ex[m] === undefined) ex[m] = () => Promise.resolve(tolerant());
     }
+    ex.createAnimation = () => Promise.resolve(makeAnimInstance(requireFn, false));
+    ex.createAndPlayAnimation = () => Promise.resolve(makeAnimInstance(requireFn, true));
     // events/features are normally set during the (skipped) expression init.
     if (!ex.events) ex.events = { dofs: { on() {}, off() {} }, kinematics: { on() {}, off() {} } };
     if (!ex.features) ex.features = tolerant();
