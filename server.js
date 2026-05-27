@@ -4,7 +4,7 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -26,6 +26,25 @@ const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
 // directories (`node_modules/@be/clock`). Disable the `extensions`/`index`/
 // `redirect` fallbacks so those 404 instead of returning a directory's
 // index.html — letting the shim fall through to `.js` / package.json `main`.
+// Compat patch (must precede the static handler): jibo's CRN texture-decode
+// worker posts its decoded texture back to the main thread as a TRANSFERABLE
+// (`postMessage({...}, [dxtData.buffer])`), but that buffer is a view into the
+// emscripten heap and isn't detachable in our Chrome — the worker's postMessage
+// throws and ANY .crn asset load (e.g. the MainMenu button atlas) hangs forever.
+// Serve the worker with the transfer list dropped so the buffer is
+// structured-cloned (copied) instead — identical result, just not zero-copy.
+// Served at its real URL (not a blob) so the worker's relative .crn XHR still
+// resolves against its http origin.
+app.get(/webgl-texture-util\.js$/, (req, res, next) => {
+  const prefix = '/external-skills/';
+  if (!req.path.startsWith(prefix)) { next(); return; }
+  const abs = normalize(join(EXTERNAL_SKILLS, req.path.slice(prefix.length)));
+  if (!abs.startsWith(normalize(EXTERNAL_SKILLS))) { next(); return; }
+  let src;
+  try { src = readFileSync(abs, 'utf8'); } catch (_) { next(); return; }
+  res.type('application/javascript').send(src.replace(/,\s*\[\s*dxtData\.buffer\s*\|\|\s*dxtData\s*\]\s*\)/g, ')'));
+});
+
 app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
 
 // Recursive file manifest for a served skill dir. The CommonJS require shim uses
