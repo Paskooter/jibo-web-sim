@@ -95,6 +95,9 @@ async function bootReal() {
         // Connect jibo-be's service clients to the in-memory service bus (the
         // in-browser stand-in for the original sim's localhost services).
         try { if (!window.__serviceBus) window.__serviceBus = installServiceBus(req); } catch (e) { console.warn('[boot] service bus:', e.message); }
+        // service-records plugin is skipped under UNIT_TESTS, so jibo.records is empty
+        // and clients have no host:port. Populate it from the bus so they connect to us.
+        try { if (window.__serviceBus) v.records = window.__serviceBus.records(); } catch (e) { console.warn('[boot] records:', e.message); }
         try { installKbService(req); } catch (e) { console.warn('[boot] kb service:', e.message); }
         if (eye) populateExpressionDofs(v, eye.robotInfo);
         installExpressionStubs(v);

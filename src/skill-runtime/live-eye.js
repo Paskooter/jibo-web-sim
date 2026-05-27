@@ -129,6 +129,18 @@ export function initOfflineServices(jibo, requireFn) {
 
   // (KB is now backed by the in-memory KnowledgeBase service — services/kb-service.js.)
 
+  // The ServicesPlugin configures all service clients (host:port from records) via
+  // ServiceClients.init, but skips it under UNIT_TESTS — so clients have no endpoint
+  // and fall back to the page origin (404 HTML). Run it ourselves against the bus
+  // records so each client connects to its local service (HTTP/ws/RPC).
+  try {
+    const SC = requireFn && requireFn('jibo-service-clients');
+    if (SC && typeof SC.init === 'function' && jibo.records && !jibo.__clientsInited) {
+      jibo.__clientsInited = true;
+      SC.init(jibo, jibo.records, () => {}, (initFn) => (cb) => { try { initFn((e, p) => cb()); } catch (_) { cb(); } });
+    }
+  } catch (e) { console.warn('[live-eye] ServiceClients.init:', e.message); }
+
   const tryInit = (obj, name) => { try { if (obj && obj.init) obj.init(jibo.log); } catch (e) { console.warn(`[live-eye] ${name}.init:`, e.message); } };
   if (jibo && jibo.lps) { tryInit(jibo.lps.identity, 'lps.identity'); tryInit(jibo.lps.detector, 'lps.detector'); }
 

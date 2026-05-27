@@ -16,6 +16,11 @@
 // ((module, exports, require, __dirname, __filename)), so resolution is sync
 // like the real thing.
 
+// Native XHR captured up-front so our internal sync requests (module loading, fs)
+// keep working even after the service layer swaps window.XMLHttpRequest to route
+// HTTP-service calls (see services/service-bus.js installHttpInterceptor).
+const NativeXHR = typeof window !== 'undefined' ? window.XMLHttpRequest : null;
+
 export function createRequire(jibo) {
   const moduleCache = {};      // url -> { exports }
   const textCache = {};        // url -> string | null
@@ -53,7 +58,7 @@ export function createRequire(jibo) {
     const root = window.__SKILL_DIR__;
     if (!root) return null;
     try {
-      const xhr = new XMLHttpRequest();
+      const xhr = new NativeXHR();
       xhr.open('GET', `/__list?root=${encodeURIComponent(root)}`, false);
       xhr.send(null);
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -75,7 +80,7 @@ export function createRequire(jibo) {
     if (knownMissing(url)) { textCache[url] = null; return null; }
     let text = null;
     try {
-      const xhr = new XMLHttpRequest();
+      const xhr = new NativeXHR();
       xhr.open('GET', url, false);
       xhr.send(null);
       if (xhr.status >= 200 && xhr.status < 300) text = xhr.responseText;
@@ -255,7 +260,7 @@ function makeHttpFs() {
     if (knownMissing(url)) { syncCache.set(key, null); return null; }
     let out = null;
     try {
-      const xhr = new XMLHttpRequest();
+      const xhr = new NativeXHR();
       xhr.open('GET', url, false);
       if (binary) xhr.overrideMimeType('text/plain; charset=x-user-defined');
       xhr.send(null);

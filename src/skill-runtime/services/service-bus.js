@@ -53,6 +53,60 @@ export class ServiceBus {
     catch (e) { return Promise.reject(e); }
   }
 
+  // HTTP-service dispatch: `impl.handleHttp(method, path, body) -> {status, body}`.
+  handleHttp(port, method, path, body) {
+    const entry = this.byPort.get(port);
+    if (!entry || !entry.impl || typeof entry.impl.handleHttp !== 'function') return Promise.resolve({ status: 404, body: '' });
+    try { return Promise.resolve(entry.impl.handleHttp(method, path, body)); } catch (e) { return Promise.reject(e); }
+  }
+
+  // Route XHR to our HTTP services. jibo-be's HTTP service clients use raw
+  // XMLHttpRequest to http://<host>:<busPort>/<path>; intercept only those and
+  // synthesize the response, proxying every other request to the native XHR.
+  installHttpInterceptor() {
+    if (typeof window === 'undefined' || window.__busXhrPatched) return;
+    window.__busXhrPatched = true;
+    const bus = this;
+    const Real = window.XMLHttpRequest;
+    const target = (url) => {
+      const m = /^https?:\/\/([^:/]+):(\d+)(\/[^#]*)?$/.exec(String(url));
+      if (!m) return null;
+      const port = Number(m[2]);
+      return bus.byPort.has(port) ? { port, path: m[3] || '/' } : null;
+    };
+    function BusXHR() { this._real = new Real(); this._t = null; this._ls = {}; this.readyState = 0; this.status = 0; this.responseText = ''; this.response = ''; this.responseType = ''; }
+    BusXHR.prototype.open = function (method, url, async) { this._method = method; this._async = async !== false; this._t = target(url); if (!this._t) this._real.open(method, url, this._async); };
+    BusXHR.prototype.setRequestHeader = function (k, v) { if (!this._t) this._real.setRequestHeader(k, v); };
+    BusXHR.prototype.getResponseHeader = function (k) { return this._t ? null : this._real.getResponseHeader(k); };
+    BusXHR.prototype.getAllResponseHeaders = function () { return this._t ? '' : this._real.getAllResponseHeaders(); };
+    BusXHR.prototype.abort = function () { if (!this._t) this._real.abort(); };
+    BusXHR.prototype.addEventListener = function (ev, cb) { (this._ls[ev] = this._ls[ev] || []).push(cb); if (!this._t) this._real.addEventListener(ev, cb); };
+    BusXHR.prototype.removeEventListener = function (ev, cb) { if (!this._t) this._real.removeEventListener(ev, cb); };
+    BusXHR.prototype._fire = function (ev) { if (typeof this['on' + ev] === 'function') this['on' + ev].call(this, {}); (this._ls[ev] || []).forEach((f) => f.call(this, {})); };
+    BusXHR.prototype.send = function (body) {
+      if (!this._t) {
+        const r = this._real;
+        r.onreadystatechange = () => { this.readyState = r.readyState; this.status = r.status; try { this.responseText = r.responseText; } catch (_) { /* responseType */ } this.response = r.response; this._fire('readystatechange'); };
+        r.onload = () => { this._fire('load'); };
+        r.onerror = () => { this._fire('error'); };
+        r.ontimeout = () => { this._fire('timeout'); };
+        r.send(body);
+        return;
+      }
+      Promise.resolve(bus.handleHttp(this._t.port, this._method, this._t.path, body)).then((res) => {
+        res = res || {};
+        this.status = res.status || 200;
+        const b = res.body;
+        this.responseText = b == null ? '' : (typeof b === 'string' ? b : JSON.stringify(b));
+        this.response = this.responseText;
+        this.readyState = 4;
+        this._fire('readystatechange'); this._fire('load');
+      }).catch(() => { this.status = 500; this.responseText = ''; this.readyState = 4; this._fire('readystatechange'); this._fire('error'); });
+    };
+    window.XMLHttpRequest = BusXHR;
+    console.log('[bus] HTTP interceptor installed');
+  }
+
   // Push an event from a service to every client connected to its port.
   emitEvent(port, instanceId, args) {
     const set = this.clientsByPort.get(port);
