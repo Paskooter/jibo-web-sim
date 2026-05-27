@@ -213,62 +213,41 @@ export function patchBeFramework(requireFn) {
   return false;
 }
 
-// Show the real idle eye. The shared asset loader is saturated by jibo-be's animation
-// preload, so the eye's own default textures never finish loading; we load them
-// directly via PIXI and apply them to the eye layers. We also force the EyeContainer
-// onto the FaceRenderer's stage (it's otherwise parented to an inactive view), drive
-// the idle pose + render each frame, and remove jibo-be's HTML splash.
+// Provide the eye's DOF stream (the expression service the robot would run). The
+// real ViewManager owns rendering (it shows the EyeView, MenuView, etc., driven by
+// the FaceRenderer's update loop), so we DON'T mount/force anything — we just apply
+// the eye's default textures once (the shared loader is saturated by jibo-be's anim
+// preload) and stream the idle pose into face.eye.display, exactly as the expression
+// service's dofs event would. This lets the eye AND the menu/views render naturally,
+// and the EyeView's touch handler reach onTouch -> MainMenu.
 export function driveEye(jibo, prep) {
-  console.log('[live-eye] driving real eye with idle DOFs');
+  console.log('[live-eye] streaming idle DOFs to the eye (view-managed)');
   const dofs = prep.dofs;
   const tex = prep.tex || {};
   const meta = { sourceTimes: {} };
   const PIXI = typeof window !== 'undefined' && window.PIXI;
   const load = (url) => (PIXI && url ? (PIXI.Texture.fromImage ? PIXI.Texture.fromImage(url) : PIXI.Texture.from(url)) : null);
-  let ready = false;
-  const ensureReady = () => {
-    const eye = jibo.face && jibo.face.eye;
-    if (ready || !eye || !PIXI || !jibo.face.stage) return ready;
-    try {
-      // Apply textures directly to the layers (bypassing the saturated loader).
-      if (eye.eye && eye.eye.init) eye.eye.init(load(tex.eye));
-      if (eye.eyeOverlay && eye.eyeOverlay.init) eye.eyeOverlay.init(load(tex.overlay));
-      if (eye.background && eye.background.init) eye.background.init(load(tex.bg));
-      jibo.face.stage.addChild(eye);     // PIXI reparents it onto the rendered stage
-      eye.active = true;
-      if (jibo.timer && jibo.timer.start) jibo.timer.start();
-      jibo.face.paused = false;
-      ready = true;
-      console.log('[live-eye] eye textures applied + mounted on stage');
-    } catch (e) { console.warn('[live-eye] ensureReady:', e.message); }
-    return ready;
-  };
+  let texApplied = false;
   const tick = () => {
     const eye = jibo.face && jibo.face.eye;
-    if (eye && eye.display) {
-      ensureReady();
-      // jibo-be's view manager keeps hiding the eye + reparenting it off the stage
-      // (its eye-view never activates offline), so re-assert every frame.
-      if (ready) {
-        if (eye.parent !== jibo.face.stage) jibo.face.stage.addChild(eye);
-        eye.visible = true;
-        eye.connected = true;
-        if (jibo.face.paused) jibo.face.paused = false;
+    if (eye) {
+      if (!texApplied && PIXI && eye.eye && eye.eye.init) {
+        try {
+          eye.eye.init(load(tex.eye));
+          if (eye.eyeOverlay && eye.eyeOverlay.init) eye.eyeOverlay.init(load(tex.overlay));
+          if (eye.background && eye.background.init) eye.background.init(load(tex.bg));
+          if (jibo.timer && jibo.timer.start) jibo.timer.start();
+          jibo.face.paused = false;
+          texApplied = true;
+        } catch (_) { /* not ready yet */ }
       }
-      // Subtle "alive" idle bob (also keeps DOFs changing so the dirty-check re-draws).
+      // Subtle "alive" idle bob; also keeps the DOFs changing so the dirty-check redraws.
       const t = performance.now() / 1000;
       const frame = Object.assign({}, dofs);
       frame.eyeSubRootBn_t_2 = (dofs.eyeSubRootBn_t_2 || 0) + Math.sin(t * 1.2) * 0.0015;
-      try {
-        eye.display(performance.now(), frame, meta);
-        eye.visible = true;   // Eye.display can reset visibility from DOFs; force it on
-        if (jibo.face.render && jibo.face.stage) jibo.face.render(jibo.face.stage);
-      } catch (_) { /* eye not ready */ }
+      if (eye.display) { try { eye.display(performance.now(), frame, meta); } catch (_) { /* eye not ready */ } }
     }
     requestAnimationFrame(tick);
   };
   tick();
-  const dropSplash = () => { const s = typeof document !== 'undefined' && document.getElementById('splash'); if (s) { s.remove(); console.log('[live-eye] removed splash'); } };
-  setTimeout(dropSplash, 3000);
-  setTimeout(dropSplash, 7000);
 }

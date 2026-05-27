@@ -127,6 +127,21 @@ async function bootReal() {
       else if (waited > 20000) { clearInterval(wait); console.warn('[boot] real runtime: jibo.face never appeared'); }
     }, 100);
   }
+
+  // Forward host screen-taps to the real FaceRenderer's gesture manager: the sim
+  // raycasts a tap on the body screen and emits {ns:'face',event:'touch',{x,y}};
+  // spoofGesture('tap') drives Hammer -> the active view's tap handler (e.g. the
+  // idle EyeView's onTouch -> MainMenu).
+  window.addEventListener('message', (ev) => {
+    const m = ev.data;
+    if (!m || m.__jibo !== true || m.kind !== 'event' || m.ns !== 'face' || m.event !== 'touch') return;
+    try {
+      const g = window.jibo && window.jibo.face && window.jibo.face.gestures;
+      if (g && g.spoofGesture) g.spoofGesture('tap', (m.data && m.data.x) || 640, (m.data && m.data.y) || 360);
+    } catch (e) { console.warn('[boot] tap forward:', e.message); }
+  });
+  // Tell the host bridge we're listening so it flushes queued events (incl. taps).
+  try { parent.postMessage({ __jibo: true, kind: 'hello' }, '*'); } catch (_) { /* no parent */ }
 }
 
 // SHIM mode: our lightweight runtime.

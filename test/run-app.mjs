@@ -40,6 +40,13 @@ await new Promise((r) => setTimeout(r, 2500));
 // Switch to the requested skill via the picker.
 await page.select('#skill-picker', skillDir).catch((e) => log.push(`[picker] ${e.message}`));
 await new Promise((r) => setTimeout(r, waitMs));
+// Optional: tap the eye (over the body screen) to exercise screen-touch -> MainMenu.
+if (process.env.CLICK_EYE) {
+  const [cx, cy] = (process.env.CLICK_EYE || '505,270').split(',').map(Number);
+  await page.mouse.click(cx, cy).catch((e) => log.push(`[click] ${e.message}`));
+  log.push(`[test] clicked eye at ${cx},${cy}`);
+  await new Promise((r) => setTimeout(r, 5000));
+}
 
 await page.screenshot({ path: shot }).catch((e) => log.push(`[shot] ${e.message}`));
 console.log(`screenshot: ${shot}`);
