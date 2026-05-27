@@ -163,6 +163,10 @@ async function startSkillRuntime() {
   // dodge the Chromium GC-cancels-speech bug.
   const synth = window.speechSynthesis;
   const liveUtters = new Set();
+  let speechChecked = false;
+  if (synth && synth.getVoices().length === 0 && typeof synth.addEventListener === 'function') {
+    synth.addEventListener('voiceschanged', () => {}); // nudge async voice load
+  }
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     if (!m || m.__jibo !== true) return;
@@ -170,13 +174,24 @@ async function startSkillRuntime() {
       const reply = () => { try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'speak-done', id: m.id }, '*'); } catch (_) { /* gone */ } };
       if (!synth || typeof window.SpeechSynthesisUtterance !== 'function' || !m.text) { reply(); return; }
       try {
+        // Diagnose the most common silent-TTS cause once: no installed voices
+        // (typical on Linux Chrome without speech-dispatcher/espeak).
+        if (!speechChecked) {
+          speechChecked = true;
+          const vs = synth.getVoices();
+          if (!vs.length) console.warn('[tts] No SpeechSynthesis voices available — Jibo will be silent. Install a system TTS voice (e.g. speech-dispatcher + espeak-ng on Linux), or use a browser/OS with built-in voices.');
+          else console.log(`[tts] ${vs.length} SpeechSynthesis voice(s) available`);
+        }
         const u = new SpeechSynthesisUtterance(m.text);
         u.rate = 1.0;
         u.pitch = 1.15; // a touch higher — closer to Jibo's voice character
+        const en = synth.getVoices().find((v) => /^en/i.test(v.lang));
+        if (en) u.voice = en;
         liveUtters.add(u);
         const done = () => { liveUtters.delete(u); reply(); };
         u.onend = done;
         u.onerror = done;
+        try { synth.resume(); } catch (_) { /* Chrome 'paused' quirk */ }
         synth.speak(u);
       } catch (_) { reply(); }
     } else if (m.kind === 'speak-stop' && synth) {

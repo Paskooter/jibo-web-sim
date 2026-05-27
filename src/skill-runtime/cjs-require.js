@@ -73,7 +73,12 @@ export function createRequire(jibo) {
   const manifest = loadManifest();
 
   const skillRoot = (typeof window !== 'undefined' && window.__SKILL_DIR__) || null;
-  const knownMissing = (url) => manifest && skillRoot && url.indexOf(skillRoot) === 0 && !manifest.has(url.split('?')[0]);
+  // The manifest holds normalized paths; callers may pass URLs with `/./` (e.g.
+  // a skill loading `./assets/x.json` resolves to `.../radio/./assets/x.json`).
+  // Collapse `/./` (and trailing `/.`) before the lookup, or real files get
+  // wrongly flagged missing and never fetched (radio's defaultStations.json).
+  const normPath = (u) => String(u).split('?')[0].replace(/\/\.(?=\/)/g, '').replace(/\/\.$/, '');
+  const knownMissing = (url) => manifest && skillRoot && url.indexOf(skillRoot) === 0 && !manifest.has(normPath(url));
   function fetchTextSync(url) {
     if (url in textCache) return textCache[url];
     // Don't even request files the manifest says aren't there (avoids 404 noise).
@@ -233,11 +238,14 @@ function makeHttpFs() {
     for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
     return btoa(bin);
   }
-  // Skip files the manifest says don't exist (avoids 404 console noise).
+  // Skip files the manifest says don't exist (avoids 404 console noise). Normalize
+  // `/./` first — the manifest is normalized, but skills resolve `./assets/x` to
+  // `.../skill/./assets/x`, which would otherwise be wrongly flagged missing.
   function knownMissing(url) {
     const m = typeof window !== 'undefined' && window.__skillManifest;
     const root = typeof window !== 'undefined' && window.__SKILL_DIR__;
-    return m && root && url.indexOf(root) === 0 && !m.has(url.split('?')[0]);
+    const norm = String(url).split('?')[0].replace(/\/\.(?=\/)/g, '').replace(/\/\.$/, '');
+    return m && root && url.indexOf(root) === 0 && !m.has(norm);
   }
   function readFile(p, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = undefined; }

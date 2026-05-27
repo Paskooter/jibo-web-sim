@@ -29,6 +29,21 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 await page.setViewport({ width: 1300, height: 820 });
+// Instrument host SpeechSynthesis so we can verify Jibo's speak round-trip even
+// though headless has no audio device (we can't hear it, but we can confirm it's
+// invoked with the right text).
+await page.evaluateOnNewDocument(() => {
+  window.__speakCalls = [];
+  try {
+    const s = window.speechSynthesis;
+    if (s && s.speak) {
+      const orig = s.speak.bind(s);
+      s.speak = (u) => { window.__speakCalls.push((u && u.text) ? String(u.text).slice(0, 70) : '?'); try { return orig(u); } catch (e) { window.__speakCalls.push('ERR:' + e.message); } };
+    } else {
+      window.__speakCalls.push('NO_SPEECHSYNTHESIS');
+    }
+  } catch (e) { window.__speakCalls.push('WRAP_ERR:' + e.message); }
+});
 const log = [];
 const tag = (m) => log.push(`[${m.type ? m.type() : 'err'}] ${m.text ? m.text() : m}`);
 page.on('console', (m) => tag(m));
@@ -76,6 +91,10 @@ if (process.env.LAUNCH_SKILL) {
     await new Promise((res) => setTimeout(res, Number(process.env.LAUNCH_WAIT || 8000)));
   }
 }
+
+const speakCalls = await page.evaluate(() => window.__speakCalls || []).catch(() => []);
+log.push(`[speak] host SpeechSynthesis.speak calls: ${speakCalls.length}`);
+speakCalls.slice(0, 12).forEach((t) => log.push(`[speak]   "${t}"`));
 
 await page.screenshot({ path: shot }).catch((e) => log.push(`[shot] ${e.message}`));
 console.log(`screenshot: ${shot}`);
