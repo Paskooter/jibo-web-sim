@@ -48,6 +48,35 @@ if (process.env.CLICK_EYE) {
   await new Promise((r) => setTimeout(r, Number(process.env.CLICK_WAIT || 5000)));
 }
 
+// Optional: after the menu is open, drive a menu selection from inside the skill
+// iframe to launch a subskill (reproduces the tap -> onItemChosen -> redirect path).
+if (process.env.LAUNCH_SKILL) {
+  const dest = process.env.LAUNCH_SKILL;
+  const frame = page.frames().find((f) => f.url().includes('skill-host'));
+  if (!frame) { log.push('[launch] skill frame not found'); }
+  else {
+    const r = await frame.evaluate((destination) => {
+      const j = window.jibo;
+      // Capture the full stack of any speak rejection (the MIM only logs the message).
+      try {
+        const sp = j.embodied && j.embodied.speech;
+        if (sp && sp.speak && !sp.__wrapped) {
+          sp.__wrapped = true;
+          const os = sp.speak.bind(sp);
+          sp.speak = function (...a) { return os(...a).catch((e) => { console.log('[SPEAK-ERR]', e && e.message, '\nSTACK:', String(e && e.stack || '')); throw e; }); };
+        }
+      } catch (_) {}
+      const view = j && j.face && j.face.views && j.face.views.currentView;
+      if (!view) return 'no currentView';
+      const info = `currentView=${view.constructor && view.constructor.name}`;
+      try { view.emit('press', { entities: { destination } }); } catch (e) { return `${info}; press err: ${e.message}`; }
+      return `${info}; pressed dest=${destination}`;
+    }, dest).catch((e) => `[evaluate err] ${e.message}`);
+    log.push(`[launch] ${r}`);
+    await new Promise((res) => setTimeout(res, Number(process.env.LAUNCH_WAIT || 8000)));
+  }
+}
+
 await page.screenshot({ path: shot }).catch((e) => log.push(`[shot] ${e.message}`));
 console.log(`screenshot: ${shot}`);
 console.log('\n===== console =====');
