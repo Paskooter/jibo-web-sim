@@ -134,11 +134,22 @@ async function bootReal() {
   // idle EyeView's onTouch -> MainMenu).
   window.addEventListener('message', (ev) => {
     const m = ev.data;
-    if (!m || m.__jibo !== true || m.kind !== 'event' || m.ns !== 'face' || m.event !== 'touch') return;
+    if (!m || m.__jibo !== true || m.kind !== 'event' || m.ns !== 'face') return;
+    const g = window.jibo && window.jibo.face && window.jibo.face.gestures;
+    if (!g) return;
+    const d = m.data || {};
     try {
-      const g = window.jibo && window.jibo.face && window.jibo.face.gestures;
-      if (g && g.spoofGesture) g.spoofGesture('tap', (m.data && m.data.x) || 640, (m.data && m.data.y) || 360);
-    } catch (e) { console.warn('[boot] tap forward:', e.message); }
+      if (m.event === 'touch' && g.spoofGesture) {
+        g.spoofGesture('tap', d.x || 640, d.y || 360);
+      } else if (m.event === 'pan' && g.spoofGestureWithOptions) {
+        // Drag on the screen -> Hammer pan (menu scroll, etc.), in face coords.
+        g.spoofGestureWithOptions('pan', {
+          isFinal: !!d.isFinal,
+          srcEvent: { movementX: d.movementX || 0, movementY: d.movementY || 0 },
+          pointers: [{ clientX: d.x || 0, clientY: d.y || 0 }],
+        });
+      }
+    } catch (e) { console.warn('[boot] gesture forward:', e.message); }
   });
   // Tell the host bridge we're listening so it flushes queued events (incl. taps).
   try { parent.postMessage({ __jibo: true, kind: 'hello' }, '*'); } catch (_) { /* no parent */ }

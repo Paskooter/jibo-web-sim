@@ -31,13 +31,25 @@ export function createViewport(hostEl) {
   controls.minDistance = 0.2;
   controls.maxDistance = 3;
 
+  // Orbit-rotate is gated behind the Ctrl key so a plain click-drag interacts
+  // with Jibo's screen (touch/scroll) instead of swinging the camera; hold Ctrl
+  // to orbit. Zoom (wheel) and pan stay live. Rotate is also suspended while a
+  // click-to-place handler is active.
+  let ctrlHeld = false;
+  let placementHandler = null;
+  const updateRotate = () => { controls.enableRotate = ctrlHeld && !placementHandler; };
+  updateRotate();
+  const isOrbitModifier = () => ctrlHeld;
+  window.addEventListener('keydown', (e) => { if (e.key === 'Control') { ctrlHeld = true; updateRotate(); } });
+  window.addEventListener('keyup', (e) => { if (e.key === 'Control') { ctrlHeld = false; updateRotate(); } });
+  window.addEventListener('blur', () => { ctrlHeld = false; updateRotate(); });
+
   // Click-to-place: when a handler is registered we suspend orbit-rotate and
   // turn viewport clicks into a world point ~0.6 m down the camera ray.
   const raycaster = new THREE.Raycaster();
-  let placementHandler = null;
   function setPlacement(handler) {
     placementHandler = handler || null;
-    controls.enableRotate = !placementHandler;
+    updateRotate();
   }
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (!placementHandler) return;
@@ -113,6 +125,7 @@ export function createViewport(hostEl) {
     dispose,
     onFrame,
     setPlacement,
+    isOrbitModifier,
     scene,
     camera,
     renderer,

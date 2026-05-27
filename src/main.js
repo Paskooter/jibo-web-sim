@@ -195,21 +195,45 @@ async function startSkillRuntime() {
   };
   bridge.register('lps', lps.service);
 
-  // Screen touch: a tap (not a drag) that hits the face quad becomes a touch
-  // event at face pixel coords. Coexists with OrbitControls (drags rotate).
+  // Screen interaction: a click-drag on the face quad drives Jibo's screen — a
+  // quick click is a tap, a drag is a pan (so menus scroll, etc.) — both in face
+  // pixel coords. Orbit-rotate is gated behind Ctrl (see scene.js), so while Ctrl
+  // is held we leave the gesture to OrbitControls and don't forward anything.
   const tapRay = new THREE.Raycaster();
   const dom = viewport.renderer.domElement;
-  let downX = 0, downY = 0, downT = 0;
-  dom.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; downT = performance.now(); });
-  dom.addEventListener('pointerup', (e) => {
-    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6 || performance.now() - downT > 350) return;
+  const faceAt = (e) => {
     const r = dom.getBoundingClientRect();
     tapRay.setFromCamera(new THREE.Vector2(
       ((e.clientX - r.left) / r.width) * 2 - 1,
       -((e.clientY - r.top) / r.height) * 2 + 1,
     ), viewport.camera);
     const hit = tapRay.intersectObject(screenMesh, false)[0];
-    if (hit && hit.uv) bridge.emit('face', 'touch', { x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 });
+    return (hit && hit.uv) ? { x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 } : null;
+  };
+  let downX = 0, downY = 0, downT = 0, dragging = false, panned = false, pfx = 0, pfy = 0;
+  dom.addEventListener('pointerdown', (e) => {
+    downX = e.clientX; downY = e.clientY; downT = performance.now(); dragging = false; panned = false;
+    if (viewport.isOrbitModifier()) return;        // Ctrl held → let the camera orbit
+    const f = faceAt(e);
+    if (f) { dragging = true; pfx = f.x; pfy = f.y; }
+  });
+  dom.addEventListener('pointermove', (e) => {
+    if (!dragging || viewport.isOrbitModifier()) return;
+    if (!panned && Math.hypot(e.clientX - downX, e.clientY - downY) <= 6) return; // ignore tap jitter
+    const f = faceAt(e);
+    if (!f) return;
+    panned = true;
+    bridge.emit('face', 'pan', { x: f.x, y: f.y, movementX: f.x - pfx, movementY: f.y - pfy, isFinal: false });
+    pfx = f.x; pfy = f.y;
+  });
+  dom.addEventListener('pointerup', (e) => {
+    if (dragging && panned) {
+      bridge.emit('face', 'pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
+    } else if (!viewport.isOrbitModifier() && Math.hypot(e.clientX - downX, e.clientY - downY) <= 6 && performance.now() - downT <= 350) {
+      const f = faceAt(e);
+      if (f) bridge.emit('face', 'touch', f);
+    }
+    dragging = false; panned = false;
   });
 
   const marker = new THREE.Mesh(
