@@ -52,11 +52,19 @@ const REAL_HTTP = {
     '/hasBackupData': { isReady: false },
     '': {},
   }),
-  // Body HTTP side (LED backlight / fan settings): POST /settings expects 204.
-  body: httpService('body', {
-    '/settings': { status: 204, body: '' },
-    '': {},
-  }),
+  // Body HTTP side (LED backlight / fan settings): GET /settings -> current
+  // settings (200 + JSON); POST /settings -> 204.
+  body: {
+    name: 'body',
+    handle() { return undefined; },
+    handleHttp(method, path) {
+      if (/\/settings/.test(path)) {
+        if (method === 'POST') return { status: 204, body: '' };
+        return { status: 200, body: { lcd_backlight: 1, fan_mode: 0, fan_speed: 0 } };
+      }
+      return { status: 200, body: {} };
+    },
+  },
 };
 
 // Service names jibo-be discovers/connects to (from skills-service-manager + the

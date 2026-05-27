@@ -141,6 +141,12 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] ServiceClients.init:', e.message); }
 
+  // Configure clients ServiceClients.init doesn't wire from records: the system
+  // client's body interface (LED/backlight) and wifi (connection state).
+  const recordFor = (name) => (jibo.records || []).find((r) => r.name === name);
+  try { const b = recordFor('body'); if (b && jibo.system && jibo.system.initBody) jibo.system.initBody(b, jibo.log, () => {}); } catch (e) { console.warn('[live-eye] system.initBody:', e.message); }
+  try { const w = recordFor('wifi'); if (w && jibo.wifi && jibo.wifi.init) jibo.wifi.init(w, jibo.log, () => {}); } catch (e) { console.warn('[live-eye] wifi.init:', e.message); }
+
   const tryInit = (obj, name) => { try { if (obj && obj.init) obj.init(jibo.log); } catch (e) { console.warn(`[live-eye] ${name}.init:`, e.message); } };
   if (jibo && jibo.lps) { tryInit(jibo.lps.identity, 'lps.identity'); tryInit(jibo.lps.detector, 'lps.detector'); }
 
