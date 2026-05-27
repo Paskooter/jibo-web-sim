@@ -76,19 +76,34 @@ export function installKbService(requireFn) {
     if (s.rootId === id) s.rootId = null;
     if (cb) cb(null);
   };
-  // KB slice management (createSlice/existsSlice) is on the KnowledgeBase itself
-  // (axios to /create + /exists). Back it with the in-memory store.
+  // KB slice management (createSlice/existsSlice/removeSlice) is on the
+  // KnowledgeBase itself (axios to /create etc.). In the real runtime these are
+  // @promisify-decorated, so they're DUAL-MODE: return a Promise when called
+  // without a callback (e.g. MimManager.loadMimKB does
+  // `kb.createSlice(name).then(...)`), and use the callback when one is given
+  // (e.g. KnowledgeBase.init). Back them with the in-memory store, preserving
+  // that duality — a callback-only stub here breaks the Promise path and the
+  // thrown "reading 'then' of undefined" gets swallowed, silently killing menus.
   const KB = kb.KnowledgeBase;
   if (KB && KB.prototype && !KB.prototype.__kbStorePatched) {
     KB.prototype.__kbStorePatched = true;
+    const dual = (cb, value) => {
+      if (cb) { cb(null, value); return undefined; }
+      return Promise.resolve(value);
+    };
     KB.prototype.createSlice = function createSlice(sliceName, httpUrl, cb) {
-      if (typeof httpUrl === 'function') cb = httpUrl;
+      if (typeof httpUrl === 'function') { cb = httpUrl; httpUrl = null; }
       storeFor(sliceName);
-      if (cb) cb(null, true);
+      return dual(cb, true);
     };
     KB.prototype.existsSlice = function existsSlice(sliceName, httpUrl, cb) {
-      if (typeof httpUrl === 'function') cb = httpUrl;
-      if (cb) cb(null, true); // slices are created on demand, so treat as existing
+      if (typeof httpUrl === 'function') { cb = httpUrl; httpUrl = null; }
+      return dual(cb, true); // slices are created on demand, so treat as existing
+    };
+    KB.prototype.removeSlice = function removeSlice(sliceName, httpUrl, cb) {
+      if (typeof httpUrl === 'function') { cb = httpUrl; httpUrl = null; }
+      stores.delete(sliceName);
+      return dual(cb, true);
     };
   }
   console.log('[kb] in-memory KnowledgeBase installed');

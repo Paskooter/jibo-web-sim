@@ -587,14 +587,34 @@ function makeBuiltins() {
     http: makeHttpClient(),
     https: makeHttpClient(),
     net: {}, tls: {}, dns: {}, dgram: {}, zlib: {}, tty: { isatty: () => false },
-    vm: {
-      runInNewContext: (code, sandbox) => { const k = Object.keys(sandbox || {}); try { return new Function(...k, code)(...k.map((n) => sandbox[n])); } catch (_) { return undefined; } }, // eslint-disable-line no-new-func
-      runInThisContext: (code) => (0, eval)(code), // eslint-disable-line no-eval
-      runInContext: (code, sandbox) => { const k = Object.keys(sandbox || {}); try { return new Function(...k, code)(...k.map((n) => sandbox[n])); } catch (_) { return undefined; } }, // eslint-disable-line no-new-func
-      createContext: (o) => o || {},
-      isContext: () => true,
-      Script: function Script(code) { this.code = code; this.runInContext = (ctx) => { const k = Object.keys(ctx || {}); try { return new Function(...k, code)(...k.map((n) => ctx[n])); } catch (_) { return undefined; } }; this.runInNewContext = this.runInContext; this.runInThisContext = () => (0, eval)(code); }, // eslint-disable-line no-new-func, no-eval
-    },
+    vm: (() => {
+      // vm.runInContext(code, ctx) returns the COMPLETION VALUE of `code` evaluated
+      // with `ctx`'s properties in scope (like eval) — not a function call. jibo's
+      // MimConfig.runSandboxed relies on this: it evals `` `${vars}` `` (a template
+      // expression) and splits the result, so an impl that returns undefined for a
+      // bodied Function (no `return`) silently kills every MIM/menu. Use `with(ctx)`
+      // + direct eval so the expression's value is returned.
+      const runIn = (code, sandbox) => {
+        // eslint-disable-next-line no-new-func
+        const fn = new Function('__sandbox__', '__code__', 'with (__sandbox__) { return eval(__code__); }');
+        try { return fn(sandbox || {}, String(code)); } catch (_) { return undefined; }
+      };
+      function Script(code) {
+        this.code = code;
+        this.runInContext = (ctx) => runIn(code, ctx);
+        this.runInNewContext = this.runInContext;
+        this.runInThisContext = () => (0, eval)(code); // eslint-disable-line no-eval
+      }
+      return {
+        runInNewContext: runIn,
+        runInContext: runIn,
+        runInThisContext: (code) => (0, eval)(code), // eslint-disable-line no-eval
+        createContext: (o) => o || {},
+        isContext: () => true,
+        Script,
+        compileFunction: (code, params = []) => { try { return new Function(...params, code); } catch (_) { return () => undefined; } }, // eslint-disable-line no-new-func
+      };
+    })(),
     domain: { create: () => ({ run: (f) => f(), on() {}, add() {}, enter() {}, exit() {}, dispose() {} }) },
     child_process: {}, cluster: {}, readline: {}, timers: { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: (f) => setTimeout(f, 0) },
     constants: {}, module: { Module: {} },
