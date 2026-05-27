@@ -3,7 +3,8 @@
 
 import express from 'express';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
+import { readdirSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -26,6 +27,29 @@ const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
 // `redirect` fallbacks so those 404 instead of returning a directory's
 // index.html — letting the shim fall through to `.js` / package.json `main`.
 app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
+
+// Recursive file manifest for a served skill dir. The CommonJS require shim uses
+// this to resolve modules WITHOUT probing (each missing probe is a console 404),
+// which otherwise floods the devtools console with thousands of failed requests.
+app.get('/__list', (req, res) => {
+  const root = String(req.query.root || '');
+  const prefix = '/external-skills/';
+  if (!root.startsWith(prefix)) { res.json({ files: [] }); return; }
+  const baseAbs = normalize(join(EXTERNAL_SKILLS, root.slice(prefix.length)));
+  if (!baseAbs.startsWith(normalize(EXTERNAL_SKILLS))) { res.status(400).json({ files: [] }); return; }
+  const files = [];
+  const walk = (absDir, urlDir) => {
+    let entries;
+    try { entries = readdirSync(absDir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      const url = `${urlDir}/${e.name}`;
+      if (e.isDirectory()) walk(join(absDir, e.name), url);
+      else files.push(url);
+    }
+  };
+  walk(baseAbs, root.replace(/\/$/, ''));
+  res.json({ files });
+});
 
 app.use(express.static(__dirname, { extensions: ['html'] }));
 

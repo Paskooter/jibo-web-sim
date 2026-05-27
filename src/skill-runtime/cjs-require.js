@@ -42,8 +42,37 @@ export function createRequire(jibo) {
     ws: makeFakeWs(),
   };
 
+  // File manifest: a Set of every URL under the skill dir, fetched once. Module
+  // resolution checks this instead of probing each candidate path over XHR — every
+  // missing probe is a console "Failed to load resource" 404, and resolving the
+  // real jibo runtime makes thousands of them. With the manifest, only files that
+  // actually exist are ever fetched.
+  function loadManifest() {
+    if (typeof window === 'undefined') return null;
+    if (window.__skillManifest) return window.__skillManifest;
+    const root = window.__SKILL_DIR__;
+    if (!root) return null;
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', `/__list?root=${encodeURIComponent(root)}`, false);
+      xhr.send(null);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const list = JSON.parse(xhr.responseText).files || [];
+        window.__skillManifest = new Set(list);
+        return window.__skillManifest;
+      }
+    } catch (_) { /* fall back to probing */ }
+    window.__skillManifest = null;
+    return null;
+  }
+  const manifest = loadManifest();
+
+  const skillRoot = (typeof window !== 'undefined' && window.__SKILL_DIR__) || null;
+  const knownMissing = (url) => manifest && skillRoot && url.indexOf(skillRoot) === 0 && !manifest.has(url.split('?')[0]);
   function fetchTextSync(url) {
     if (url in textCache) return textCache[url];
+    // Don't even request files the manifest says aren't there (avoids 404 noise).
+    if (knownMissing(url)) { textCache[url] = null; return null; }
     let text = null;
     try {
       const xhr = new XMLHttpRequest();
@@ -54,7 +83,7 @@ export function createRequire(jibo) {
     textCache[url] = text;
     return text;
   }
-  const exists = (url) => fetchTextSync(url) !== null;
+  const exists = (url) => (manifest && skillRoot && url.indexOf(skillRoot) === 0 ? manifest.has(url) : fetchTextSync(url) !== null);
 
   function dirname(p) { return p.replace(/\/[^/]*$/, '') || '/'; }
   function join(base, rel) {
@@ -199,10 +228,17 @@ function makeHttpFs() {
     for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
     return btoa(bin);
   }
+  // Skip files the manifest says don't exist (avoids 404 console noise).
+  function knownMissing(url) {
+    const m = typeof window !== 'undefined' && window.__skillManifest;
+    const root = typeof window !== 'undefined' && window.__SKILL_DIR__;
+    return m && root && url.indexOf(root) === 0 && !m.has(url.split('?')[0]);
+  }
   function readFile(p, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = undefined; }
     const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
     const url = mapUrl(p);
+    if (knownMissing(url)) { const e = new Error(`ENOENT: ${url}`); e.code = 'ENOENT'; cb(e); return; }
     fetch(url).then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
       if (enc === 'base64') return r.arrayBuffer().then((b) => cb(null, toBase64(b)));
@@ -216,6 +252,7 @@ function makeHttpFs() {
   function getSync(url, binary) {
     const key = (binary ? 'b:' : 't:') + url;
     if (syncCache.has(key)) return syncCache.get(key);
+    if (knownMissing(url)) { syncCache.set(key, null); return null; }
     let out = null;
     try {
       const xhr = new XMLHttpRequest();
@@ -244,7 +281,9 @@ function makeHttpFs() {
   function open(p, flags, mode, cb) {
     if (typeof mode === 'function') { cb = mode; mode = undefined; }
     if (typeof flags === 'function') { cb = flags; flags = 'r'; }
-    fetch(mapUrl(p)).then((r) => { if (!r.ok) throw new Error(`ENOENT ${r.status}`); return r.arrayBuffer(); })
+    const u0 = mapUrl(p);
+    if (knownMissing(u0)) { const e = new Error(`ENOENT: ${u0}`); e.code = 'ENOENT'; cb(e); return; }
+    fetch(u0).then((r) => { if (!r.ok) throw new Error(`ENOENT ${r.status}`); return r.arrayBuffer(); })
       .then((b) => { const fd = fdSeq; fdSeq += 1; fds.set(fd, new Uint8Array(b)); cb(null, fd); })
       .catch((e) => cb(e));
   }
@@ -266,10 +305,16 @@ function makeHttpFs() {
     exists: (p, cb) => cb && cb(existsSync(p)),
     statSync: (p) => { if (!existsSync(p)) { const e = new Error(`ENOENT: ${p}`); e.code = 'ENOENT'; throw e; } return { isFile: () => true, isDirectory: () => false, size: 0 }; },
     stat: (p, cb) => cb && cb(null, { isFile: () => true, isDirectory: () => false, size: 0 }),
+    // fs-extra extras (jibo-log etc. call these for log dirs); no real FS, so no-op.
+    ensureDirSync: () => {}, ensureDir: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
+    ensureFileSync: () => {}, mkdirpSync: () => {}, mkdirp: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
+    outputFile: (p, d, cb) => { if (cb) cb(null); }, outputFileSync: () => {}, removeSync: () => {}, remove: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     open, fstat, read, close,
     readdir: (p, cb) => { const f = typeof cb === 'function' ? cb : (typeof p === 'function' ? p : null); if (f) f(null, []); },
     readdirSync: () => [],
     writeFile: (p, d, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); },
+    writeFileSync: () => {}, appendFile: (p, d, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); }, appendFileSync: () => {},
+    unlink: (p, cb) => cb && cb(null), unlinkSync: () => {}, mkdir: (p, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); }, mkdirSync: () => {},
   };
 }
 
