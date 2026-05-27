@@ -178,6 +178,21 @@ export function initOfflineServices(jibo, requireFn) {
 // block the skill launch. Call this only once @be/be-framework is loaded (don't
 // force-require it early — that breaks its own load order).
 export function patchBeFramework(requireFn) {
+  // jibo-be's in-process service servers (e.g. ContextService) extend
+  // jibo-service-framework's HTTPService and can't bind a real socket in-browser
+  // (init throws). Make the server init resolve without binding — clients reach
+  // services through our bus/interceptors, not these servers.
+  try {
+    const sf = requireFn && requireFn('jibo-service-framework');
+    for (const cls of ['HTTPService', 'HTTPWSService', 'HTTPSWSService']) {
+      const C = sf && sf[cls];
+      if (C && C.prototype && !Object.prototype.hasOwnProperty.call(C.prototype, '__offlineInit')) {
+        C.prototype.__offlineInit = true;
+        C.prototype.init = function init(callback) { if (callback) setTimeout(() => callback(null), 0); return Promise.resolve(); };
+      }
+    }
+  } catch (e) { console.warn('[live-eye] jibo-service-framework patch:', e.message); }
+
   try {
     const bf = requireFn && requireFn('@be/be-framework');
     const BeSkill = bf && (bf.BeSkill || bf.default);
