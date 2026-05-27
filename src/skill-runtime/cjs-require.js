@@ -429,7 +429,30 @@ function makeFakeWs() {
   Socket.prototype.close = function () { this.readyState = 3; this.emit('close'); };
   Socket.prototype.terminate = function () { this.readyState = 3; };
 
+  // Bridge a real browser WebSocket to the `ws`-package event interface, so the
+  // configured backend server (e.g. a Pegasus jetstream at ws://pegasus.jibo:8090)
+  // is actually reached instead of the in-memory fake.
+  function realSocket(url) {
+    const sock = new Socket();
+    sock.url = url;
+    sock.readyState = 0;
+    let real;
+    try { real = new window.WebSocket(url); } catch (e) { setTimeout(() => sock.emit('error', e), 0); return sock; }
+    real.onopen = () => { sock.readyState = 1; sock.emit('open'); };
+    real.onmessage = (ev) => sock.emit('message', ev.data);
+    real.onclose = () => { sock.readyState = 3; sock.emit('close'); };
+    real.onerror = (e) => sock.emit('error', e);
+    sock.send = (data) => { try { real.send(data); } catch (_) { /* not open */ } };
+    sock.close = () => { try { real.close(); } catch (_) { /* already closed */ } };
+    sock.terminate = sock.close;
+    return sock;
+  }
+
   function WebSocket(url) {
+    const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
+    if (server && typeof window !== 'undefined' && window.WebSocket && String(url).indexOf(server) >= 0) {
+      return realSocket(url);
+    }
     const client = new Socket();
     client.url = url;
     setTimeout(() => {

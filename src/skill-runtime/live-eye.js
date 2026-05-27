@@ -236,6 +236,25 @@ export function installWebSpeech(jibo) {
   } catch (e) { console.warn('[live-eye] installWebSpeech failed:', e.message); }
 }
 
+// When a backend server is configured in the host UI (window.__JIBO_SERVER__),
+// connect the jetstream cloud client to it. jibo-be skips jetstream init under
+// UNIT_TESTS (and hardcodes localhost), so init the shared @jibo/jetstream-client
+// api ourselves, pointed at the server's jetstream — ws://<server>:8090/events,
+// which the cjs-require fake-ws passthrough routes to a real browser WebSocket.
+// This brings up cloud dialog / Hey-Jibo (and GQA where pegasus routes it here).
+export function connectCloud(requireFn) {
+  const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
+  if (!server) return;
+  try {
+    const js = requireFn('@jibo/jetstream-client');
+    if (!js || typeof js.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
+    console.log('[cloud] connecting jetstream to', `${server}:8090`);
+    Promise.resolve(js.init({ hostname: server, port: 8090 }))
+      .then(() => console.log('[cloud] jetstream connected to', `${server}:8090`))
+      .catch((e) => console.warn('[cloud] jetstream connect failed:', (e && e.message) || e));
+  } catch (e) { console.warn('[cloud] jetstream init error:', e.message); }
+}
+
 // Some service clients initialize internal state (loggers, data converters) in an
 // init() that UNIT_TESTS skips, then crash later when used (e.g. the analytics
 // path logEvent -> getActiveSpeaker -> DataConverter.mostRecentSpeaker on an
