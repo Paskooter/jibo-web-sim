@@ -117,18 +117,36 @@ function makeEmitter(Event, name) {
 // animation path throws. Give `.events` REAL emitters; everything else stays
 // tolerant. On a play, fire `started` then `stopped` (next tick) so the playback's
 // completion promise resolves and the skill proceeds instead of awaiting forever.
-function makeAnimInstance(requireFn, play) {
+// Playback length (ms) of a .keys animation from its computed data
+// (`duration` frames / `framerate` fps). The skill paces its flow off the
+// animation completing, so this must be the REAL length: too short and a splash
+// screen flashes and vanishes before it's seen (Word of the Day "did nothing");
+// too long and the skill stalls. Falls back to a sane default if unknown.
+function animDurationMs(options) {
+  try {
+    const d = options && options.data;
+    if (d && typeof d.duration === 'number' && d.duration > 0) {
+      const fps = (typeof d.framerate === 'number' && d.framerate > 0) ? d.framerate : 30;
+      return Math.min(20000, Math.max(150, (d.duration / fps) * 1000));
+    }
+  } catch (_) { /* fall through */ }
+  return 1500;
+}
+
+function makeAnimInstance(requireFn, play, options) {
   let Event;
   try { Event = requireFn('jibo-typed-events').Event; } catch (_) { /* fall back to local emitter */ }
   const events = {};
   for (const n of ['general', 'audio', 'pixi', 'holdSafe', 'stopped', 'cancelled', 'rejected', 'started', 'stateChange']) {
     events[n] = makeEmitter(Event, n);
   }
+  let stopped = false;
+  const emitStopped = () => { if (stopped) return; stopped = true; try { events.stopped.emit(); } catch (_) { /* no listener */ } };
   if (play) {
     Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
-    // Complete on the next macrotask so the local KeysAnimation gets a render
-    // window, then resolves the playback (no real DOF arbiter to end it for us).
-    setTimeout(() => { try { events.stopped.emit(); } catch (_) { /* no listener */ } }, 0);
+    // The eye renders the .keys locally over its duration; signal completion when
+    // that elapses so the playback promise resolves and the skill advances.
+    setTimeout(emitStopped, animDurationMs(options));
   }
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
@@ -136,7 +154,7 @@ function makeAnimInstance(requireFn, play) {
       if (p === 'events') return events;
       if (p === 'state') return 'INVALID';
       if (p === 'then' || typeof p === 'symbol') return undefined;
-      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { try { events.stopped.emit(); } catch (_) { /* none */ } return tolerant(); };
+      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { emitStopped(); return tolerant(); };
       if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
       return tolerant();
     },
@@ -165,8 +183,8 @@ export function installExpressionStubs(jibo, requireFn) {
     for (const m of EXPRESSION_METHODS) {
       if (typeof ex[m] === 'function' || ex[m] === undefined) ex[m] = () => Promise.resolve(tolerant());
     }
-    ex.createAnimation = () => Promise.resolve(makeAnimInstance(requireFn, false));
-    ex.createAndPlayAnimation = () => Promise.resolve(makeAnimInstance(requireFn, true));
+    ex.createAnimation = (opts) => Promise.resolve(makeAnimInstance(requireFn, false, opts));
+    ex.createAndPlayAnimation = (opts) => Promise.resolve(makeAnimInstance(requireFn, true, opts));
     // events/features are normally set during the (skipped) expression init.
     if (!ex.events) ex.events = { dofs: { on() {}, off() {} }, kinematics: { on() {}, off() {} } };
     if (!ex.features) ex.features = tolerant();
