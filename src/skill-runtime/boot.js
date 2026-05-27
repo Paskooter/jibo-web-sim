@@ -22,6 +22,10 @@ import { installKbService } from './services/kb-service.js';
 const params = new URLSearchParams(location.search);
 const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
 const entry = params.get('entry') || 'index.html';
+// Optional backend server (e.g. a Pegasus cloud at `pegasus.jibo`), set in the
+// host UI. Exposed for the runtime/services to route cloud requests at.
+const server = (params.get('server') || '').trim();
+if (server) window.__JIBO_SERVER__ = server;
 
 // Run the bundle's index.html: inject its styles + body DOM, then run its scripts
 // (external src resolved against the bundle dir; inline via eval).

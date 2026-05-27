@@ -63,6 +63,17 @@ installNotificationsPanel(panelsEl.querySelector('[data-panel="notes"]'), {
   onPush: (n) => pushNotification(n),
 });
 
+// Backend server address (e.g. a Pegasus cloud at `pegasus.jibo`). Persisted and
+// passed to the skill iframe so the runtime can route cloud requests there.
+// Changing it reloads the current skill so the new address takes effect.
+const serverInput = document.getElementById('server-addr');
+const getServer = () => (localStorage.getItem('jibo-server') || '').trim();
+serverInput.value = getServer();
+serverInput.addEventListener('change', () => {
+  localStorage.setItem('jibo-server', serverInput.value.trim());
+  if (switchSkill && skillPicker.value) switchSkill(skillPicker.value);
+});
+
 // Skill picker — populated from each bundle's manifest (display-name).
 const skillPicker = document.getElementById('skill-picker');
 (async () => {
@@ -312,7 +323,8 @@ async function startSkillRuntime() {
       setActiveTarget(null);              // drop any look-at when switching skills
       // The in-place loader (skill-host.html) sets up jibo + require, then runs
       // the bundle's own index.html unmodified.
-      iframe.src = `/skill-host.html?dir=${encodeURIComponent(skill.dir)}&entry=${encodeURIComponent(skill.main)}`;
+      const server = getServer();
+      iframe.src = `/skill-host.html?dir=${encodeURIComponent(skill.dir)}&entry=${encodeURIComponent(skill.main)}${server ? `&server=${encodeURIComponent(server)}` : ''}`;
       if (skillPicker.value !== dir) skillPicker.value = dir;
     } catch (err) {
       console.error('skill load failed:', err);
