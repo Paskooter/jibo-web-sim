@@ -27,6 +27,19 @@ export function createRequire(jibo) {
     'graceful-fs': builtins.fs,
     'jibo-tunable': tolerantStub(),
     'fs-extra': builtins.fs,
+    // The real jibo runtime touches electron's ipcRenderer; a no-op satisfies it.
+    electron: { ipcRenderer: { send() {}, on() {}, once() {}, removeListener() {}, removeAllListeners() {} } },
+    // Optional native addons (ws speedups) that don't exist in the browser; stub
+    // them so the resolver doesn't probe (and 404) the whole node_modules tree.
+    bufferutil: {}, 'utf-8-validate': {},
+    // Node-server/native-only deps jibo-be pulls in but can't use in-browser
+    // (express static file serving; icecast audio streaming). Stub to avoid load errors.
+    send: () => ({ on() { return this; }, pipe() {} }), icecast: { Client: function () {}, Reader: function () {}, Writer: function () {} },
+    // In-memory WebSocket (the `ws` package). jibo-be's service clients open ws
+    // channels (body/notifications/lps); with no server they'd error + reconnect
+    // forever. This connects silently and routes to local channel handlers
+    // registered on window.__wsServers (so ported services can push messages).
+    ws: makeFakeWs(),
   };
 
   function fetchTextSync(url) {
@@ -91,18 +104,44 @@ export function createRequire(jibo) {
     }
   }
 
+  // The real jibo-plugins PathUtils.resolve() uses node's Module internals to
+  // locate packages (e.g. 'animation-utilities' for the eye textures). Back them
+  // with our own resolver so those lookups return real paths instead of null.
+  // node's require('module') returns the Module constructor (self-referential:
+  // Module.Module === Module) with static _resolveFilename/_nodeModulePaths.
+  builtins.module._nodeModulePaths = function (fromDir) {
+    const paths = [];
+    let dir = fromDir || '/';
+    for (;;) {
+      paths.push(join(dir, 'node_modules'));
+      if (dir === '/' || dir === '') break;
+      dir = dirname(dir);
+    }
+    return paths;
+  };
+  builtins.module._resolveFilename = function (request, opts) {
+    const fromDir = opts && opts.filename ? dirname(opts.filename)
+      : (opts && opts.paths && opts.paths[0] ? dirname(opts.paths[0]) : '/');
+    const r = resolve(request, fromDir);
+    if (!r) { const e = new Error(`Cannot find module '${request}'`); e.code = 'MODULE_NOT_FOUND'; throw e; }
+    return r;
+  };
+  builtins.module.Module = builtins.module;
+
   function requireFrom(fromDir) {
     return function require(request) {
-      if (request === 'jibo') return jibo;
+      // With a shim supplied, require('jibo') returns it. With none (createRequire(null)),
+      // it falls through to node_modules so the bundle's OWN real jibo runtime loads.
+      if (request === 'jibo' && jibo) return jibo;
       if (request in overrides) return overrides[request];
       if (builtins[request]) return builtins[request];
 
       const url = resolve(request, fromDir);
-      if (!url) { console.warn(`[require] cannot resolve '${request}' from ${fromDir}`); return {}; }
+      if (!url) { if (window.__CJS_DEBUG__) console.warn(`[require] cannot resolve '${request}' from ${fromDir}`); return {}; }
       if (moduleCache[url]) return moduleCache[url].exports;
 
       const src = fetchTextSync(url);
-      if (src == null) { console.warn(`[require] failed to load ${url}`); return {}; }
+      if (src == null) { if (window.__CJS_DEBUG__) console.warn(`[require] failed to load ${url}`); return {}; }
 
       const module = { exports: {} };
       moduleCache[url] = module;
@@ -115,7 +154,8 @@ export function createRequire(jibo) {
           `${src}\n//# sourceURL=${url}`);
         fn(module, module.exports, requireFrom(moduleDir), moduleDir, url, window, builtins.process);
       } catch (e) {
-        console.error(`[require] error executing ${url}:`, e);
+        const detail = e && (e.stack || `${e.message || e}${e.missingRef ? ` missingRef=${e.missingRef}` : ''}${e.missingSchema ? ` missingSchema=${e.missingSchema}` : ''}`);
+        console.error(`[require] error executing ${url}:`, detail);
       }
       return module.exports;
     };
@@ -138,6 +178,229 @@ function tolerantStub() {
     apply() { return tolerantStub(); },
     construct() { return tolerantStub(); },
   });
+}
+
+// fs whose reads resolve over HTTP. Absolute bundle paths (…/node_modules/x/y)
+// are rebased onto the skill's served root (window.__SKILL_DIR__), so the real
+// jibo LocalLoader's fs.readFile(uri, encoding, cb) loads eye textures etc.
+function makeHttpFs() {
+  function mapUrl(p) {
+    p = String(p);
+    if (/^(https?:)?\/\//.test(p)) return p;
+    const root = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
+    const i = p.lastIndexOf('/node_modules/');
+    if (i >= 0) return root + p.slice(i);
+    if (p[0] === '/') return p;            // already an absolute server path
+    return `${root}/${p}`;
+  }
+  function toBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function readFile(p, opts, cb) {
+    if (typeof opts === 'function') { cb = opts; opts = undefined; }
+    const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+    const url = mapUrl(p);
+    fetch(url).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+      if (enc === 'base64') return r.arrayBuffer().then((b) => cb(null, toBase64(b)));
+      if (enc === 'utf8' || enc === 'utf-8') return r.text().then((t) => cb(null, t));
+      return r.arrayBuffer().then((b) => cb(null, new Uint8Array(b)));
+    }).catch((e) => cb(e));
+  }
+  // Synchronous reads (jibo-plugins PathUtils.findRoot walks up for package.json)
+  // are served by synchronous XHR against the mapped HTTP URL.
+  const syncCache = new Map();    // url -> text | null (findRoot probes the same paths repeatedly)
+  function getSync(url, binary) {
+    const key = (binary ? 'b:' : 't:') + url;
+    if (syncCache.has(key)) return syncCache.get(key);
+    let out = null;
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url, false);
+      if (binary) xhr.overrideMimeType('text/plain; charset=x-user-defined');
+      xhr.send(null);
+      if (xhr.status >= 200 && xhr.status < 300) out = xhr.responseText;
+    } catch (_) { out = null; }
+    syncCache.set(key, out);
+    return out;
+  }
+  function existsSync(p) { return getSync(mapUrl(p), false) !== null; }
+  function readFileSync(p, opts) {
+    const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+    const url = mapUrl(p);
+    const binary = enc === 'base64';
+    const text = getSync(url, binary);
+    if (text === null) { const e = new Error(`ENOENT: ${url}`); e.code = 'ENOENT'; throw e; }
+    if (binary) { let bin = ''; for (let i = 0; i < text.length; i += 1) bin += String.fromCharCode(text.charCodeAt(i) & 0xff); return btoa(bin); }
+    return text;
+  }
+  // fd-based reads (jibo-cai-utils.FileUtils.readFile opens, fstats, chunk-reads,
+  // closes — used to load the 1MB AnimDB). open fetches the whole file once.
+  const fds = new Map();
+  let fdSeq = 1;
+  function open(p, flags, mode, cb) {
+    if (typeof mode === 'function') { cb = mode; mode = undefined; }
+    if (typeof flags === 'function') { cb = flags; flags = 'r'; }
+    fetch(mapUrl(p)).then((r) => { if (!r.ok) throw new Error(`ENOENT ${r.status}`); return r.arrayBuffer(); })
+      .then((b) => { const fd = fdSeq; fdSeq += 1; fds.set(fd, new Uint8Array(b)); cb(null, fd); })
+      .catch((e) => cb(e));
+  }
+  function fstat(fd, cb) { const u = fds.get(fd); if (!u) return cb && cb(new Error('EBADF')); return cb && cb(null, { size: u.length, isFile: () => true, isDirectory: () => false }); }
+  function read(fd, buffer, offset, length, position, cb) {
+    const u = fds.get(fd);
+    if (!u) return cb && cb(new Error('EBADF'));
+    const pos = position == null ? 0 : position;
+    const end = Math.min(pos + length, u.length);
+    let n = 0;
+    for (let i = pos; i < end; i += 1) { buffer[offset + n] = u[i]; n += 1; }
+    return cb && cb(null, n, buffer);
+  }
+  function close(fd, cb) { fds.delete(fd); if (cb) cb(null); }
+  return {
+    readFile,
+    readFileSync,
+    existsSync,
+    exists: (p, cb) => cb && cb(existsSync(p)),
+    statSync: (p) => { if (!existsSync(p)) { const e = new Error(`ENOENT: ${p}`); e.code = 'ENOENT'; throw e; } return { isFile: () => true, isDirectory: () => false, size: 0 }; },
+    stat: (p, cb) => cb && cb(null, { isFile: () => true, isDirectory: () => false, size: 0 }),
+    open, fstat, read, close,
+    readdir: (p, cb) => { const f = typeof cb === 'function' ? cb : (typeof p === 'function' ? p : null); if (f) f(null, []); },
+    readdirSync: () => [],
+    writeFile: (p, d, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); },
+  };
+}
+
+// Node-faithful url.parse: crucially it returns `.path` (pathname+search), which
+// `new URL` omits. ajv 5's id resolution reads p.path, so without it absolute
+// schema ids collapse (http://x/y# -> http://x#) and every $ref breaks.
+function makeUrl() {
+  function parse(u) {
+    u = String(u);
+    let hash = null;
+    const hi = u.indexOf('#');
+    if (hi >= 0) { hash = u.slice(hi); u = u.slice(0, hi); }
+    let search = null;
+    const si = u.indexOf('?');
+    if (si >= 0) { search = u.slice(si); u = u.slice(0, si); }
+    let protocol = null;
+    let slashes = false;
+    let host = '';
+    let pathname = u;
+    const pm = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(\/\/)?/.exec(u);
+    if (pm) {
+      protocol = pm[1];
+      let rest = u.slice(pm[0].length);
+      if (pm[2]) {
+        slashes = true;
+        const slash = rest.indexOf('/');
+        if (slash >= 0) { host = rest.slice(0, slash); pathname = rest.slice(slash); } else { host = rest; pathname = ''; }
+      } else { pathname = rest; }
+    } else if (u.slice(0, 2) === '//') {
+      slashes = true;
+      const rest = u.slice(2);
+      const slash = rest.indexOf('/');
+      if (slash >= 0) { host = rest.slice(0, slash); pathname = rest.slice(slash); } else { host = rest; pathname = ''; }
+    }
+    const [hostname, port] = host.split(':');
+    const path = ((pathname || '') + (search || '')) || null;
+    return {
+      href: String(arguments[0]),
+      protocol,
+      slashes,
+      host: host || null,
+      hostname: hostname || null,
+      port: port || null,
+      hash,
+      search,
+      query: search ? search.slice(1) : null,
+      pathname: pathname || null,
+      path,
+    };
+  }
+  function format(o) {
+    if (typeof o === 'string') return o;
+    const proto = o.protocol ? (o.protocol.endsWith(':') ? o.protocol : `${o.protocol}:`) : '';
+    const sep = o.slashes || /^(https?|ftp|file):$/.test(proto) ? '//' : '';
+    return `${proto}${sep}${o.host || o.hostname || ''}${o.pathname || ''}${o.search || ''}${o.hash || ''}` || o.href || '';
+  }
+  function resolve(from, to) {
+    try { return new URL(to, from).href; } catch (_) {
+      if (!to) return from;
+      if (/^[a-zA-Z][\w+.-]*:\/\//.test(to)) return to;
+      if (to[0] === '#') { const i = String(from).indexOf('#'); return (i >= 0 ? String(from).slice(0, i) : String(from)) + to; }
+      return to;
+    }
+  }
+  return { parse, format, resolve, Url: function Url() {} };
+}
+
+// http/https that fail fast: any request emits 'error' on the next tick so
+// callbacks fire (callers treat the service as unavailable and continue) instead
+// of hanging forever waiting on a response that never comes.
+function makeHttpClient() {
+  function makeReq() {
+    const handlers = {};
+    let fired = false;
+    const fail = () => {
+      if (fired) return; fired = true;
+      setTimeout(() => { (handlers.error || []).forEach((h) => h(new Error('no local server (web sim)'))); }, 0);
+    };
+    const req = {
+      on(ev, cb) { (handlers[ev] = handlers[ev] || []).push(cb); if (ev === 'error') fail(); return req; },
+      once(ev, cb) { return req.on(ev, cb); },
+      write() { return req; },
+      end() { fail(); return req; },
+      abort() {}, destroy() {}, setTimeout() { return req; }, setHeader() {}, flushHeaders() {},
+    };
+    return req;
+  }
+  return {
+    request: () => makeReq(),
+    get: () => { const r = makeReq(); r.end(); return r; },
+  };
+}
+
+// In-memory replacement for the `ws` package. Clients connect silently (emit
+// 'open', never 'error'/'close') so jibo-be's HTTPWSClient doesn't reconnect-storm;
+// if a handler for the URL is registered on window.__wsServers, the two sides are
+// wired for bidirectional JSON messaging (so ported channel services work).
+function makeFakeWs() {
+  function Socket() { this._h = {}; this.readyState = 1; }
+  Socket.prototype.on = function (e, cb) { (this._h[e] = this._h[e] || []).push(cb); return this; };
+  Socket.prototype.once = function (e, cb) { const g = (...a) => { this.removeListener(e, g); cb(...a); }; return this.on(e, g); };
+  Socket.prototype.addEventListener = Socket.prototype.on;
+  Socket.prototype.removeListener = function (e, cb) { const a = this._h[e]; if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } return this; };
+  Socket.prototype.removeAllListeners = function () { this._h = {}; return this; };
+  Socket.prototype.emit = function (e, ...a) { (this._h[e] || []).slice().forEach((f) => f(...a)); };
+  Socket.prototype.send = function (data) { if (this._peer) { const d = typeof data === 'string' ? data : String(data); setTimeout(() => this._peer.emit('message', d), 0); } };
+  Socket.prototype.close = function () { this.readyState = 3; this.emit('close'); };
+  Socket.prototype.terminate = function () { this.readyState = 3; };
+
+  function WebSocket(url) {
+    const client = new Socket();
+    client.url = url;
+    setTimeout(() => {
+      const servers = (typeof window !== 'undefined' && window.__wsServers) || [];
+      const srv = servers.find((s) => { try { return s.match(url); } catch (_) { return false; } });
+      if (srv) {
+        const server = new Socket();
+        server.url = url;
+        let path = url; try { path = new URL(url, 'ws://x').pathname; } catch (_) { /* keep url */ }
+        server.upgradeReq = { url: path };
+        client._peer = server; server._peer = client;
+        try { srv.onConnection(server); } catch (_) { /* handler error */ }
+      }
+      client.emit('open');   // connect silently whether or not a handler exists
+    }, 0);
+    return client;
+  }
+  WebSocket.prototype = Socket.prototype;
+  WebSocket.Server = function Server() { this.on = function () { return this; }; this.close = function () {}; this.handleUpgrade = function () {}; };
+  WebSocket.CONNECTING = 0; WebSocket.OPEN = 1; WebSocket.CLOSING = 2; WebSocket.CLOSED = 3;
+  return WebSocket;
 }
 
 function makeBuiltins() {
@@ -165,17 +428,31 @@ function makeBuiltins() {
   class PassThrough extends Transform { }
   const stream = { Writable, Readable, Transform, Duplex, PassThrough, Stream: Writable };
 
-  // Buffer must be constructable (`new Buffer(...)` is used by ws/iconv/etc.).
-  function Buffer(arg) {
-    if (typeof arg === 'number') return new Array(arg).fill(0);
-    if (typeof arg === 'string') return arg.split('').map((c) => c.charCodeAt(0));
-    return arg || [];
+  // Buffer: Uint8Array-backed with a node-like toString(encoding,start,end) so
+  // fd reads + `buffer.toString('utf8')` (jibo's AnimDB loader) work, while
+  // `new Buffer(n)` / indexed writes / from / concat keep working for ws/iconv/etc.
+  const _td = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
+  const _te = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+  function _decode(u8, encoding, start, end) {
+    const s = start || 0;
+    const e = end === undefined ? u8.length : end;
+    const sub = u8.subarray(s, e);
+    if (encoding === 'base64') { let b = ''; for (let i = 0; i < sub.length; i += 1) b += String.fromCharCode(sub[i]); return btoa(b); }
+    if (encoding === 'hex') { let h = ''; for (let i = 0; i < sub.length; i += 1) h += sub[i].toString(16).padStart(2, '0'); return h; }
+    return _td ? _td.decode(sub) : String.fromCharCode.apply(null, Array.from(sub));
   }
-  Buffer.from = (x) => (typeof x === 'string' ? x.split('').map((c) => c.charCodeAt(0)) : (x || []));
-  Buffer.alloc = (n) => new Array(n).fill(0);
-  Buffer.allocUnsafe = (n) => new Array(n).fill(0);
-  Buffer.isBuffer = () => false;
-  Buffer.concat = (arr) => [].concat(...arr);
+  function _wrap(u8) { u8.toString = function (enc, s, e) { return _decode(this, enc, s, e); }; return u8; }
+  function Buffer(arg) {
+    if (typeof arg === 'number') return _wrap(new Uint8Array(arg));
+    if (typeof arg === 'string') return _wrap(_te ? _te.encode(arg) : Uint8Array.from(arg, (c) => c.charCodeAt(0) & 0xff));
+    if (arg instanceof Uint8Array || Array.isArray(arg)) return _wrap(Uint8Array.from(arg));
+    return _wrap(new Uint8Array(0));
+  }
+  Buffer.from = (x) => Buffer(x);
+  Buffer.alloc = (n) => _wrap(new Uint8Array(n));
+  Buffer.allocUnsafe = (n) => _wrap(new Uint8Array(n));
+  Buffer.isBuffer = (x) => x instanceof Uint8Array;
+  Buffer.concat = (arr) => { let len = 0; for (const a of arr) len += a.length; const out = new Uint8Array(len); let o = 0; for (const a of arr) { out.set(a, o); o += a.length; } return _wrap(out); };
 
   const path = {
     sep: '/',
@@ -186,15 +463,41 @@ function makeBuiltins() {
     resolve: (...a) => a.join('/').replace(/\/{2,}/g, '/'),
     relative: (from, to) => to,
     normalize: (p) => String(p).replace(/\/{2,}/g, '/'),
+    isAbsolute: (p) => String(p).charAt(0) === '/',
+    parse: (p) => {
+      p = String(p);
+      const base = p.split('/').pop();
+      const ext = (/\.[^./]+$/.exec(base) || [''])[0];
+      return { root: p[0] === '/' ? '/' : '', dir: p.replace(/\/[^/]*$/, '') || (p[0] === '/' ? '/' : ''), base, ext, name: ext ? base.slice(0, -ext.length) : base };
+    },
   };
   const process = {
     env: { NODE_ENV: 'production' },
     platform: 'browser',
     argv: ['node', 'skill'],
     nextTick: (f, ...a) => Promise.resolve().then(() => f(...a)),
-    cwd: () => '/',
+    // The skill root, which has a package.json — jibo-plugins FindRoot/getPackagePath
+    // and the `core://` asset-pack resolver start here. Returning '/' makes them
+    // thrash (no package.json up the tree) and mis-resolve core assets.
+    cwd: () => (typeof window !== 'undefined' && window.__SKILL_DIR__) || '/',
     on() {}, once() {}, exit() {},
-    version: 'v16.0.0', versions: { node: '16.0.0' },
+    title: 'browser', pid: 1, arch: 'x64',
+    hrtime: (prev) => {
+      const ns = Math.floor((typeof performance !== 'undefined' ? performance.now() : Date.now()) * 1e6);
+      const sec = Math.floor(ns / 1e9);
+      const nano = ns % 1e9;
+      if (prev) { let s = sec - prev[0]; let n = nano - prev[1]; if (n < 0) { s -= 1; n += 1e9; } return [s, n]; }
+      return [sec, nano];
+    },
+    uptime: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000,
+    memoryUsage: () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0 }),
+    stdout: { write() { return true; } }, stderr: { write() { return true; } },
+    send() {},
+    version: 'v16.0.0',
+    // The real jibo Runtime gates its render path on `process.versions.electron`.
+    // Off by default; the live-face boot opts in via window.__JIBO_ELECTRON__ so
+    // the shim path for other bundles is unaffected.
+    versions: { node: '16.0.0', get electron() { return (typeof window !== 'undefined' && window.__JIBO_ELECTRON__) ? '11.0.0' : undefined; } },
   };
   return {
     events: Object.assign(EventEmitter, { EventEmitter }),
@@ -206,18 +509,39 @@ function makeBuiltins() {
       format: (...a) => a.join(' '),
       isArray: Array.isArray,
     },
-    fs: { readFileSync: () => { throw new Error('fs unavailable in web sim'); }, existsSync: () => false, readFile: (p, o, cb) => (cb || o)(new Error('fs unavailable')) },
+    // HTTP-backed fs: the real jibo loader (LocalLoader) reads assets via
+    // fs.readFile(uri, 'base64'|'utf8'). We map the absolute bundle path onto the
+    // skill's HTTP root and fetch it, so the disk loader works unmodified.
+    fs: makeHttpFs(),
     os: { platform: () => 'browser', homedir: () => '/', tmpdir: () => '/tmp', EOL: '\n', hostname: () => 'websim' },
-    assert: Object.assign((v, m) => { if (!v) throw new Error(m || 'assert'); }, { equal: () => {}, ok: (v, m) => { if (!v) throw new Error(m || 'assert'); } }),
+    // The real jibo runtime's GlobalPerfTimer double-stops a perf timer during
+    // init (benign instrumentation) and asserts on it; that throw would break
+    // jibo.init's callback chain, which skills wait on. Downgrade that one to a warn.
+    assert: (() => {
+      const benign = (m) => typeof m === 'string' && /PerformanceTimer\.stop\(\) was called twice/.test(m);
+      const fn = (v, m) => { if (!v) { if (benign(m)) return; throw new Error(m || 'assert'); } };
+      return Object.assign(fn, {
+        equal: () => {},
+        ok: (v, m) => { if (!v) { if (benign(m)) return; throw new Error(m || 'assert'); } },
+      });
+    })(),
     stream,
     buffer: { Buffer },
     string_decoder: { StringDecoder: class { write(x) { return String(x); } end() { return ''; } } },
     crypto: { randomBytes: (n) => Buffer.alloc(n), createHash: () => ({ update() { return this; }, digest: () => '' }), createHmac: () => ({ update() { return this; }, digest: () => '' }) },
-    url: { parse: (u) => { try { const x = new URL(u); return { href: x.href, protocol: x.protocol, host: x.host, hostname: x.hostname, port: x.port, pathname: x.pathname, search: x.search, query: x.search.slice(1) }; } catch (_) { return { href: u }; } }, format: (o) => (typeof o === 'string' ? o : o.href || ''), resolve: (from, to) => { try { return new URL(to, from).href; } catch (_) { return to; } } },
-    querystring: { parse: (s) => Object.fromEntries(new URLSearchParams(s)), stringify: (o) => new URLSearchParams(o).toString() },
-    http: { request: () => ({ on() { return this; }, end() {}, write() {} }), get: () => ({ on() { return this; } }) },
-    https: { request: () => ({ on() { return this; }, end() {}, write() {} }), get: () => ({ on() { return this; } }) },
-    net: {}, tls: {}, dns: {}, dgram: {}, zlib: {}, tty: { isatty: () => false }, vm: {},
+    url: makeUrl(),
+    querystring: { parse: (s) => Object.fromEntries(new URLSearchParams(s)), stringify: (o) => new URLSearchParams(o).toString(), escape: (s) => encodeURIComponent(String(s)), unescape: (s) => decodeURIComponent(String(s)) },
+    // No local servers exist, so HTTP requests must FAIL FAST (emit 'error') rather
+    // than hang — jibo's service clients (RegistryClient/NotificationsDispatcher)
+    // wait on the callback and would otherwise stall the whole boot.
+    http: makeHttpClient(),
+    https: makeHttpClient(),
+    net: {}, tls: {}, dns: {}, dgram: {}, zlib: {}, tty: { isatty: () => false },
+    vm: {
+      runInNewContext: (code, sandbox) => { const k = Object.keys(sandbox || {}); try { return new Function(...k, code)(...k.map((n) => sandbox[n])); } catch (_) { return undefined; } }, // eslint-disable-line no-new-func
+      runInThisContext: (code) => (0, eval)(code), // eslint-disable-line no-eval
+      createContext: (o) => o || {},
+    },
     domain: { create: () => ({ run: (f) => f(), on() {}, add() {}, enter() {}, exit() {}, dispose() {} }) },
     child_process: {}, cluster: {}, readline: {}, timers: { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: (f) => setTimeout(f, 0) },
     constants: {}, module: { Module: {} },

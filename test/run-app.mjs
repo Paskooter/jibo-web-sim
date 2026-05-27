@@ -32,7 +32,7 @@ await page.setViewport({ width: 1300, height: 820 });
 const log = [];
 const tag = (m) => log.push(`[${m.type ? m.type() : 'err'}] ${m.text ? m.text() : m}`);
 page.on('console', (m) => tag(m));
-page.on('pageerror', (e) => log.push(`[pageerror] ${e.message}`));
+page.on('pageerror', (e) => log.push(`[pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(1, 5).join('\n')}`));
 
 await page.goto(`${base}/`, { waitUntil: 'networkidle2', timeout: 30000 }).catch((e) => log.push(`[goto] ${e.message}`));
 await page.waitForSelector('#start-gate', { timeout: 15000 }).then(() => page.click('#start-gate')).catch((e) => log.push(`[start] ${e.message}`));

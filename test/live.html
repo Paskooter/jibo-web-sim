@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>live: real jibo-be runtime + local DOF driver</title>
+  <style>
+    html, body { margin: 0; background: #111; }
+    #face { width: 1280px; height: 720px; transform-origin: top left; }
+    #log { position: fixed; right: 0; top: 0; width: 340px; height: 100%; overflow: auto;
+           font: 11px monospace; color: #9f9; background: #000c; padding: 6px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="face"></div>
+  <pre id="log"></pre>
+  <script type="module">
+    import { createRequire } from '/src/skill-runtime/cjs-require.js';
+    const L = (...a) => { document.getElementById('log').textContent += a.map(x => x instanceof Error ? `${x.message}` : String(x)).join(' ') + '\n'; console.log('[live]', ...a); };
+    window.addEventListener('unhandledrejection', (e) => L('unhandledrejection:', e.reason && (e.reason.message || e.reason)));
+
+    const DIR = '/external-skills/jibo-be';
+    window.__SKILL_DIR__ = DIR;
+    window.__JIBO_ELECTRON__ = true;
+    const req = createRequire(null)(DIR);
+    window.require = req; window.module = { exports: {} }; window.exports = window.module.exports;
+    window.global = window; window.process = req('process');
+    window.process.env.RUNMODE = 'UNIT_TESTS';     // service plugins skip cleanly offline
+    window.Buffer = window.Buffer || req('buffer').Buffer;
+    window.PIXI = req('pixi.js');
+
+    const face = document.getElementById('face');
+    face.style.transform = `scale(${Math.min((innerWidth - 350) / 1280, innerHeight / 720)})`;
+
+    const jibo = req('/external-skills/jibo-be/node_modules/jibo/lib/jibo.js');
+    const anim = req('animation-utilities');
+    L('real jibo + animation-utilities loaded. runMode=', jibo.runMode);
+
+    function sampleAnim(a, t) {
+      const out = {};
+      for (const ch of a.content.channels) {
+        const T = ch.times; const V = ch.values; let v;
+        if (t <= T[0]) v = V[0]; else if (t >= T[T.length - 1]) v = V[V.length - 1];
+        else for (let i = 0; i < T.length - 1; i += 1) if (t >= T[i] && t <= T[i + 1]) { const f = (t - T[i]) / (T[i + 1] - T[i]); v = V[i] + f * (V[i + 1] - V[i]); break; }
+        out[ch.dofName] = v;
+      }
+      return out;
+    }
+
+    async function startDriver() {
+      const base = `${location.origin}${DIR}/node_modules/animation-utilities/res/geometry-config/`;
+      const tdir = `${base}P1.0/textures/`;
+      const config = new anim.JiboConfig(base);
+      const idleAnim = await fetch(`${base}P1.0/jibo_default.anim`).then((r) => r.json());
+      anim.RobotInfo.createInfo(config, (ri) => {
+        if (!ri) { L('robotInfo null'); return; }
+        const baseDofs = ri.getDefaultDOFValues();
+        const dofs = Object.assign({}, baseDofs, sampleAnim(idleAnim, 0));
+        dofs.eyeTextureInfixBn_r = `${tdir}Default_Eye.png`;
+        dofs.overlayTextureInfixBn_r = `${tdir}JiBO_eye_customizer_44.png`;
+        dofs.screenBGTextureInfixBn_r = `${tdir}JiBO_BG_00.png`;
+        L('driving eye with idle DOFs…');
+        let n = 0;
+        const tick = () => {
+          n += 1;
+          try { jibo.face.eye.display(performance.now(), dofs, { sourceTimes: {} }); }
+          catch (e) { if (n < 3) L('display threw:', e.message); }
+          if (n < 1200) requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    }
+
+    L('jibo.init({display})…');
+    let started = false;
+    const begin = () => { if (started) return; started = true; startDriver(); };
+    try {
+      jibo.init({ display: face }, (err) => { L('init cb:', err ? `ERR ${err}` : 'OK'); begin(); });
+    } catch (e) { L('init threw:', e.message); }
+    // Fallback: drive even if the init callback is swallowed by a perf-timer quirk.
+    setTimeout(begin, 6000);
+
+    let k = 0;
+    setInterval(() => { k += 1; L(`t=${k}s faceChildren=${face.childElementCount} canvas=${!!face.querySelector('canvas')}`); }, 1000);
+  </script>
+</body>
+</html>

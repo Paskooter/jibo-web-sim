@@ -3,3 +3,4 @@ node_modules/
 .cache/
 .vscode/
 *.log
+docs/session-handoff.md

@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>real jibo eye (animation-utilities visualize) experiment</title>
+  <style>
+    html, body { margin: 0; background: #000; }
+    #eye { width: 640px; height: 640px; }
+    #log { position: fixed; right: 0; top: 0; width: 380px; height: 100%; overflow: auto;
+           font: 11px monospace; color: #9f9; background: #000c; padding: 6px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="eye"></div>
+  <pre id="log"></pre>
+  <script type="module">
+    import { createRequire } from '/src/skill-runtime/cjs-require.js';
+    const logEl = document.getElementById('log');
+    const L = (...a) => { logEl.textContent += a.map(x => x instanceof Error ? `${x.message}\n${x.stack}` : String(x)).join(' ') + '\n'; console.log('[realeye]', ...a); };
+    window.addEventListener('error', (e) => L('window.error:', e.message));
+    window.addEventListener('unhandledrejection', (e) => L('unhandledrejection:', e.reason && (e.reason.stack || e.reason.message || e.reason)));
+
+    const DIR = '/external-skills/jibo-be';
+    window.__SKILL_DIR__ = DIR;
+    const req = createRequire(null)(DIR);
+    window.require = req; window.module = { exports: {} }; window.exports = window.module.exports;
+    window.global = window; window.process = req('process');
+    window.Buffer = window.Buffer || req('buffer').Buffer;
+
+    let anim;
+    try {
+      anim = req('animation-utilities');
+      L('animation-utilities loaded. keys:', Object.keys(anim).join(','));
+      try {
+        const t3 = req('three');
+        L('req(three): REVISION=', t3 && t3.REVISION, ' MeshPhongMaterial=', typeof (t3 && t3.MeshPhongMaterial), ' ImageLoader=', typeof (t3 && t3.ImageLoader), ' sameAsAnimTHREE=', t3 === anim.THREE);
+      } catch (e) { L('req(three) failed:', e.message); }
+      L('anim.THREE: rev=', anim.THREE && anim.THREE.REVISION, ' MeshPhongMaterial=', typeof (anim.THREE && anim.THREE.MeshPhongMaterial), ' keys=', anim.THREE && Object.keys(anim.THREE).length);
+      // Some bundled THREE instances lack ImageLoader; polyfill the r70 API.
+      if (anim.THREE && typeof anim.THREE.ImageLoader !== 'function') {
+        anim.THREE.ImageLoader = function (manager) { this.manager = manager; this.crossOrigin = undefined; this.path = undefined; };
+        anim.THREE.ImageLoader.prototype = {
+          load(url, onLoad, onProgress, onError) {
+            const img = document.createElement('img');
+            img.onload = () => onLoad && onLoad(img);
+            img.onerror = (e) => onError && onError(e);
+            if (this.crossOrigin !== undefined) img.crossOrigin = this.crossOrigin;
+            img.src = (this.path || '') + url;
+            return img;
+          },
+          setCrossOrigin(v) { this.crossOrigin = v; return this; },
+          setPath(v) { this.path = v; return this; },
+          setWithCredentials() { return this; },
+        };
+        L('polyfilled THREE.ImageLoader');
+      }
+    } catch (e) { L('load animation-utilities FAILED:', e); }
+
+    if (anim) {
+      const base = `${location.origin}${DIR}/node_modules/animation-utilities/res/geometry-config/`;
+      L('JiboConfig base:', base);
+      try {
+        const config = new anim.JiboConfig(base);
+        L('RobotInfo.createInfo…');
+        anim.RobotInfo.createInfo(config, (robotInfo) => {
+          L('robotInfo ready. default DOF keys:', Object.keys(robotInfo.getDefaultDOFValues() || {}).length);
+          anim.visualize.createRobotRenderer(robotInfo, document.getElementById('eye'), anim.visualize.DisplayType.EYE, (rr) => {
+            if (!rr) { L('createRobotRenderer returned null'); return; }
+            L('robotRenderer created. canvas?', !!document.querySelector('#eye canvas'));
+            window.__rr = rr;
+            // Re-display default DOFs each second to confirm it stays up.
+            let n = 0;
+            const iv = setInterval(() => { n++; rr.display(robotInfo.getDefaultDOFValues()); L(`t=${n}s canvas=${!!document.querySelector('#eye canvas')}`); if (n >= 8) clearInterval(iv); }, 1000);
+          });
+        });
+      } catch (e) { L('visualize path threw:', e); }
+    }
+  </script>
+</body>
+</html>

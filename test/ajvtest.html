@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ajv test</title></head>
+<body><pre id="log"></pre>
+<script type="module">
+import { createRequire } from '/src/skill-runtime/cjs-require.js';
+const L = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; console.log('[ajv]', ...a); };
+const DIR = '/external-skills/jibo-be';
+window.__SKILL_DIR__ = DIR;
+const req = createRequire(null)(DIR);
+window.require = req; window.global = window; window.process = req('process');
+try {
+  const draft04 = req('ajv/lib/refs/json-schema-draft-04.json');
+  L('draft04 id:', draft04.id, ' has positiveInteger:', !!(draft04.definitions && draft04.definitions.positiveInteger));
+  const schema = req('@types/jibo-command-protocol/commandSchema.json');
+  L('commandSchema $schema:', schema['$schema'], ' keys:', Object.keys(schema).join(','));
+  const Ajv = req('ajv');
+  L('Ajv typeof:', typeof Ajv, ' name:', Ajv && Ajv.name);
+  const ajv = new Ajv({ allErrors: true });
+  ajv.addMetaSchema(draft04);
+  L('addMetaSchema ok');
+  const v = ajv.compile(schema);
+  L('compile ok, validator typeof:', typeof v);
+} catch (e) {
+  L('THREW:', e && (e.message || e), ' missingRef:', e && e.missingRef, '\n', e && e.stack);
+}
+</script>
+</body></html>
