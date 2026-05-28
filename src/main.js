@@ -172,6 +172,7 @@ async function startSkillRuntime() {
     if (!m || m.__jibo !== true) return;
     if (m.kind === 'speak') {
       const reply = () => { try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'speak-done', id: m.id }, '*'); } catch (_) { /* gone */ } };
+      if (m.text) chat.addJiboMessage(m.text);   // every spoken line shows up in Chat
       if (!synth || typeof window.SpeechSynthesisUtterance !== 'function' || !m.text) { reply(); return; }
       try {
         // Diagnose the most common silent-TTS cause once: no installed voices
@@ -224,7 +225,14 @@ async function startSkillRuntime() {
   // (Real wake-word/speech-to-text is shelved; Chat is the text stand-in.)
   const asr = createAsrService({ emit: (event, data) => bridge.emit('asr', event, data) });
   bridge.register('asr', asr.service);
-  chat.setSendHandler((text) => asr.recognize(text));
+  // Typed chat input goes to the skill as recognized speech: ASR.recognize for
+  // shim skills, and also into the iframe so real-runtime jibo-be can inject it
+  // via MimManager.handleSpeech — the same path the original simulator used to
+  // turn typed lines into user utterances.
+  chat.setSendHandler((text) => {
+    asr.recognize(text);
+    try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'utterance', text }, '*'); } catch (_) { /* iframe gone */ }
+  });
 
   // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.
   const animation = createAnimationService({

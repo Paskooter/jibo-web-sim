@@ -95,6 +95,9 @@ if (process.env.LAUNCH_SKILL) {
 const speakCalls = await page.evaluate(() => window.__speakCalls || []).catch(() => []);
 log.push(`[speak] host SpeechSynthesis.speak calls: ${speakCalls.length}`);
 speakCalls.slice(0, 12).forEach((t) => log.push(`[speak]   "${t}"`));
+const chatJibo = await page.evaluate(() => Array.from(document.querySelectorAll('.chat-msg.chat-jibo')).map((e) => e.textContent.slice(0, 70))).catch(() => []);
+log.push(`[chat] jibo messages logged: ${chatJibo.length}`);
+chatJibo.slice(0, 12).forEach((t) => log.push(`[chat]   "${t}"`));
 
 await page.screenshot({ path: shot }).catch((e) => log.push(`[shot] ${e.message}`));
 console.log(`screenshot: ${shot}`);

@@ -254,9 +254,9 @@ export function connectCloud(requireFn) {
     // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
     const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
     if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
-    console.log('[cloud] connecting jetstream to', `${server}:8090`);
-    Promise.resolve(api.init({ hostname: server, port: 8090 }))
-      .then(() => console.log('[cloud] jetstream connected to', `${server}:8090`))
+    console.log('[cloud] connecting jetstream to', `${server}:8080`);
+    Promise.resolve(api.init({ hostname: server, port: 8080 }))
+      .then(() => console.log('[cloud] jetstream connected to', `${server}:8080`))
       .catch((e) => console.warn('[cloud] jetstream connect failed:', (e && e.message) || e));
   } catch (e) { console.warn('[cloud] jetstream init error:', e.message); }
 }

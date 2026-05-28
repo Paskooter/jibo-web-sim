@@ -138,7 +138,19 @@ async function bootReal() {
   // idle EyeView's onTouch -> MainMenu).
   window.addEventListener('message', (ev) => {
     const m = ev.data;
-    if (!m || m.__jibo !== true || m.kind !== 'event' || m.ns !== 'face') return;
+    if (!m || m.__jibo !== true) return;
+    // Typed chat input from the host -> spoofed user utterance into the MIM
+    // (MimManager.handleSpeech is the same hook ActionData.UTTERANCE uses).
+    if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
+      try {
+        const mim = window.jibo && window.jibo.mim;
+        if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function') {
+          mim.handleSpeech.emit({ intent: m.text.trim(), entities: {}, rules: null });
+        }
+      } catch (e) { console.warn('[boot] utterance forward:', e.message); }
+      return;
+    }
+    if (m.kind !== 'event' || m.ns !== 'face') return;
     const g = window.jibo && window.jibo.face && window.jibo.face.gestures;
     if (!g) return;
     const d = m.data || {};
