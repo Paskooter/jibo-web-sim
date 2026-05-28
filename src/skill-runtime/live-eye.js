@@ -243,9 +243,11 @@ export function installWebSpeech(jibo) {
 // When a backend server is configured in the host UI (window.__JIBO_SERVER__),
 // connect the jetstream cloud client to it. jibo-be skips jetstream init under
 // UNIT_TESTS (and hardcodes localhost), so init the shared @jibo/jetstream-client
-// api ourselves, pointed at the server's jetstream — ws://<server>:8090/events,
-// which the cjs-require fake-ws passthrough routes to a real browser WebSocket.
-// This brings up cloud dialog / Hey-Jibo (and GQA where pegasus routes it here).
+// api ourselves, pointed at the Pegasus hub — ws://<server>:9000/events. The
+// hub's docker-compose maps host :9000 to container :8080 (Pegasus convention is
+// host ports in the 9000+ range; 8080 is internal-network only). cjs-require's
+// fake-ws passthrough routes that URL to a real browser WebSocket. Local Pegasus
+// has auth disabled by default, so no webTokenSecret is needed here.
 export function connectCloud(requireFn) {
   const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
   if (!server) return;
@@ -254,9 +256,9 @@ export function connectCloud(requireFn) {
     // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
     const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
     if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
-    console.log('[cloud] connecting jetstream to', `${server}:8080`);
-    Promise.resolve(api.init({ hostname: server, port: 8080 }))
-      .then(() => console.log('[cloud] jetstream connected to', `${server}:8080`))
+    console.log('[cloud] connecting jetstream to', `${server}:9000`);
+    Promise.resolve(api.init({ hostname: server, port: 9000 }))
+      .then(() => console.log('[cloud] jetstream connected to', `${server}:9000`))
       .catch((e) => console.warn('[cloud] jetstream connect failed:', (e && e.message) || e));
   } catch (e) { console.warn('[cloud] jetstream init error:', e.message); }
 }
