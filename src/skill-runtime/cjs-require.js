@@ -459,7 +459,12 @@ function makeFakeWs() {
   function WebSocket(url) {
     const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
     if (server && typeof window !== 'undefined' && window.WebSocket && String(url).indexOf(server) >= 0) {
-      return realSocket(url);
+      // jetstream-client opens ws://host/events + /vad, but Pegasus's hub serves
+      // its WebSocket at /listen and has no /vad. Rewrite /events -> /listen for
+      // the configured server, and silent-fake /vad (no upstream).
+      let u = String(url);
+      if (/\/vad(\?|$)/.test(u)) { /* fall through to in-memory silent socket */ }
+      else { if (/\/events(\?|$)/.test(u)) u = u.replace(/\/events(\?|$)/, '/listen$1'); return realSocket(u); }
     }
     const client = new Socket();
     client.url = url;
