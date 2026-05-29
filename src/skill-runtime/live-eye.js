@@ -92,6 +92,17 @@ export function populateExpressionDofs(jibo, robotInfo) {
   } catch (e) { console.warn('[live-eye] populateExpressionDofs failed:', e.message); }
 }
 
+// Method names on expression-service handles (AttentionHandle / AcquireHandle /
+// AwaitFaceHandle / ReleaseHandle) that the embodied-dialog code awaits via
+// `Utils.timeout(handle.release(), TIMEOUT)`. Each must RETURN A PROMISE so
+// timeout()'s `pr.then(...)` doesn't blow up with "pr.then is not a function".
+// See jibo-expression-client ReleaseHandle.release / AnimationInstance.stop —
+// all return Promises from sendMessage().
+const PROMISE_RETURNING_METHODS = new Set([
+  'release', 'cancel', 'stop', 'destroy', 'fastForward', 'play', 'pause',
+  'reset', 'finish', 'init', 'open', 'close',
+]);
+
 // A value that is await-able (resolves), callable, and tolerant on any property —
 // stands in for expression-service results (AnimationInstance, handles, …) so
 // jibo-be's awaited expression calls resolve instead of hanging/throwing.
@@ -101,6 +112,12 @@ function tolerant() {
     get(t, p) {
       if (p === 'then' || p === Symbol.toPrimitive || p === Symbol.iterator) return undefined; // not thenable/iterable
       if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
+      if (typeof p === 'string' && PROMISE_RETURNING_METHODS.has(p)) {
+        // Real handles return Promise<void> from these. Returning a plain
+        // tolerant() proxy here breaks Utils.timeout(pr) — it expects pr.then
+        // to be a function.
+        return () => Promise.resolve();
+      }
       if (typeof p === 'symbol') return undefined;
       return tolerant();
     },
@@ -242,7 +259,8 @@ function makeAnimInstance(requireFn, play, options) {
       if (p === 'events') return events;
       if (p === 'state') return 'INVALID';
       if (p === 'then' || typeof p === 'symbol') return undefined;
-      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { emitStopped(); return tolerant(); };
+      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { emitStopped(); return Promise.resolve(); };
+      if (typeof p === 'string' && PROMISE_RETURNING_METHODS.has(p)) return () => Promise.resolve();
       if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
       return tolerant();
     },

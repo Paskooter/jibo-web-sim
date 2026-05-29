@@ -199,9 +199,20 @@ export class GlobalManagerService {
     // so a naive redirect crashes Be.redirect with "Cannot read properties
     // of undefined (reading 'assetPack')". For those, the local handler is
     // @be/nimbus — it reads match.cloudSkill + awaits cloudSkillResponse
-    // to execute the cloud container's SKILL_ACTION payload. We rewrite
-    // the broadcast so the redirect targets @be/nimbus and preserves the
-    // original cloud skill name in match.cloudSkill.
+    // to execute the cloud container's SKILL_ACTION payload.
+    //
+    // Two fields drive nimbus's open():
+    //  - match.skillID — rewritten to '@be/nimbus' so be/index.js's
+    //    skillRelaunch handler can find this.skills[skillID].
+    //  - listenResult.cloudSkillResponse — a Promise<SKILL_ACTION-data>.
+    //    NOT set here; GlobalEvents.onSkillRelaunch (jibo.js:19634) stamps
+    //    it from `jetstream.getCloudSkillResponse(transID)` IFF
+    //    !match.onRobot. So we MUST leave match.onRobot=false (not flip
+    //    it to true) — otherwise nimbus opens with an undefined
+    //    cloudSkillResponse and throws "Nimbus launched without complete
+    //    ListenResult; unable to proceed!".
+    // The original cloud-skill name is preserved on match.cloudSkill so
+    // nimbus reads it in its Open state.
     const enriched = this._serializeResult(result);
     enriched.match = enriched.match || {};
     const rawMatch = enriched.match.skillID || skillID;
@@ -211,7 +222,7 @@ export class GlobalManagerService {
       enriched.match.cloudSkill = rawMatch;
       routedSkillID = '@be/nimbus';
       enriched.match.skillID = '@be/nimbus';
-      enriched.match.onRobot = true;
+      enriched.match.onRobot = false;     // keep so cloudSkillResponse gets wired
     } else {
       routedSkillID = rawMatch;
       enriched.match.skillID = rawMatch;
