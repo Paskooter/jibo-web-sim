@@ -71,6 +71,25 @@ app.get(/webgl-texture-util\.js$/, (req, res, next) => {
   res.type('application/javascript').send(src.replace(/,\s*\[\s*dxtData\.buffer\s*\|\|\s*dxtData\s*\]\s*\)/g, ')'));
 });
 
+// @be/nimbus references animation textures (White_Eye.png etc.) under its own
+// animations/textures/ folder but the directory doesn't exist in the bundle —
+// nimbus is the "thinking" skill that reuses anim-db's named animations, and
+// they reference the textures relative to nimbus's path. The actual files
+// live in jibo-anim-db-animations/animations/textures/. Redirect missing
+// nimbus texture requests to that bundle so the loader doesn't 404 every
+// frame of a cloud-skill response.
+app.get(/\/@be\/nimbus\/animations\/textures\/([^/?#]+)$/, (req, res, next) => {
+  const file = req.path.split('/').pop();
+  const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${file}`;
+  // Probe disk to avoid an infinite loop if the fallback is also missing.
+  const fs = require('node:fs');
+  try {
+    const abs = normalize(join(EXTERNAL_SKILLS, fallback.slice('/external-skills/'.length)));
+    if (fs.existsSync(abs)) return res.redirect(302, fallback);
+  } catch (_) { /* fall through */ }
+  next();
+});
+
 app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
 
 // Recursive file manifest for a served skill dir. The CommonJS require shim uses
@@ -94,6 +113,48 @@ app.get('/__list', (req, res) => {
   };
   walk(baseAbs, root.replace(/\/$/, ''));
   res.json({ files });
+});
+
+// Cross-origin image proxy. Skill SKILL_ACTIONs (notably news from
+// report-skill) reference remote thumbnail/article images by absolute URL.
+// PIXI loads them through HTMLImageElement with crossOrigin='anonymous', but
+// most public image servers don't return Access-Control-Allow-Origin — the
+// image displays in <img> tags but texImage2D refuses to upload it as a
+// WebGL texture ("SecurityError: image element contains cross-origin data").
+// Once the upload fails, the sprite's _texture stays null and PIXI's
+// SpriteRenderer.flush crashes every frame reading baseTexture → endless
+// console spam.
+// /__img?url=<encoded> fetches the remote image server-side and replays
+// the bytes back as same-origin, side-stepping CORS entirely.
+app.get('/__img', (req, res) => {
+  const target = String(req.query.url || '');
+  if (!/^https?:\/\//i.test(target)) { res.status(400).type('text/plain').send('bad url'); return; }
+  const lib = target.startsWith('https') ? require('node:https') : require('node:http');
+  lib.get(target, { headers: { 'User-Agent': 'jibo-web-sim' } }, (upstream) => {
+    // Follow one redirect.
+    if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
+      const loc = upstream.headers.location;
+      const next = /^https?:\/\//i.test(loc) ? loc : new URL(loc, target).toString();
+      const lib2 = next.startsWith('https') ? require('node:https') : require('node:http');
+      lib2.get(next, { headers: { 'User-Agent': 'jibo-web-sim' } }, (u2) => {
+        res.status(u2.statusCode || 502);
+        for (const [k, v] of Object.entries(u2.headers)) {
+          if (/^(transfer-encoding|connection|content-security-policy|access-control-allow-origin)$/i.test(k)) continue;
+          res.setHeader(k, v);
+        }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        u2.pipe(res);
+      }).on('error', (e) => res.status(502).type('text/plain').send(e.message));
+      return;
+    }
+    res.status(upstream.statusCode || 502);
+    for (const [k, v] of Object.entries(upstream.headers)) {
+      if (/^(transfer-encoding|connection|content-security-policy|access-control-allow-origin)$/i.test(k)) continue;
+      res.setHeader(k, v);
+    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    upstream.pipe(res);
+  }).on('error', (e) => res.status(502).type('text/plain').send(e.message));
 });
 
 // Same-origin proxy to a Pegasus cloud backend, to dodge CORS. The iframe sends

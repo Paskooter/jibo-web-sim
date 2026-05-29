@@ -505,6 +505,39 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
+  // Cross-origin images (news thumbnails from report-skill SKILL_ACTIONs)
+  // load fine into <img> tags but PIXI's texImage2D fails ("SecurityError:
+  // image element contains cross-origin data, and may not be loaded") if
+  // the remote server doesn't return Access-Control-Allow-Origin. Once one
+  // texture upload fails, the sprite's _texture stays null and
+  // PIXI.SpriteRenderer.flush throws "Cannot read properties of null
+  // (reading 'baseTexture')" every render frame → console spam.
+  // Patch HTMLImageElement.src so any cross-origin URL gets routed through
+  // our same-origin /__img proxy (added to server.js). The proxy fetches
+  // server-side and replays the bytes back with permissive CORS, so the
+  // image is no longer cross-origin from the browser's perspective and
+  // texImage2D succeeds.
+  try {
+    const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+    if (desc && desc.set && !HTMLImageElement.prototype.__webProxied) {
+      HTMLImageElement.prototype.__webProxied = true;
+      const isCrossOrigin = (u) => /^https?:\/\//i.test(u) && new URL(u, location.href).origin !== location.origin;
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        configurable: true,
+        get: desc.get,
+        set(url) {
+          try {
+            const s = String(url == null ? '' : url);
+            if (isCrossOrigin(s)) {
+              url = `${location.origin}/__img?url=${encodeURIComponent(s)}`;
+            }
+          } catch (_) { /* leave url unchanged */ }
+          desc.set.call(this, url);
+        },
+      });
+    }
+  } catch (e) { console.warn('[live-eye] image proxy patch:', e.message); }
+
   // Lifecycle.finished crashes under UNIT_TESTS: its init (jibo.js:7841)
   // returns early without creating `this._client`, and every phase-end
   // callsite (~10 places in jibo.js, plus skill graphs) does
