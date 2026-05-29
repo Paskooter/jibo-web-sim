@@ -192,18 +192,35 @@ export class GlobalManagerService {
       // handles it locally. Nothing to push.
       return;
     }
-    console.log('[global-manager] -> skill-relaunch', skillID, '(clients=' + this.clients.size + ')');
 
-    // Ensure the forwarded result has a usable `match` block. The hub may
-    // have left match:null; synthesize one from nlu.entities.skill /
-    // domain heuristic so onSkillRelaunch sees `result.match.skillID`.
+    // The hub may set match.onRobot=false for cloud-container skills
+    // (chitchat-skill / personal-report-skill / news / answer). Those names
+    // never appear in @be/be's skills map (it keys by @be/* package names),
+    // so a naive redirect crashes Be.redirect with "Cannot read properties
+    // of undefined (reading 'assetPack')". For those, the local handler is
+    // @be/nimbus — it reads match.cloudSkill + awaits cloudSkillResponse
+    // to execute the cloud container's SKILL_ACTION payload. We rewrite
+    // the broadcast so the redirect targets @be/nimbus and preserves the
+    // original cloud skill name in match.cloudSkill.
     const enriched = this._serializeResult(result);
     enriched.match = enriched.match || {};
-    if (!enriched.match.skillID) enriched.match.skillID = skillID;
-    if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
+    const rawMatch = enriched.match.skillID || skillID;
+    const isLocalBeSkill = typeof rawMatch === 'string' && rawMatch.startsWith('@be/');
+    let routedSkillID;
+    if (enriched.match.onRobot === false || !isLocalBeSkill) {
+      enriched.match.cloudSkill = rawMatch;
+      routedSkillID = '@be/nimbus';
+      enriched.match.skillID = '@be/nimbus';
+      enriched.match.onRobot = true;
+    } else {
+      routedSkillID = rawMatch;
+      enriched.match.skillID = rawMatch;
+      if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
+    }
     // Mirror the nlu.skill field that @be/be-framework.onSkillRelaunch reads
     // (skillData.nlu.skill — see be-framework lib line ~190).
-    if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = skillID;
+    if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = routedSkillID;
+    console.log('[global-manager] -> skill-relaunch', routedSkillID, enriched.match.cloudSkill ? '(cloud=' + enriched.match.cloudSkill + ')' : '', '(clients=' + this.clients.size + ')');
 
     this._broadcast({ status: 'OK', message: 'skill-relaunch', result: enriched });
   }
