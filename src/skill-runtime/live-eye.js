@@ -251,6 +251,7 @@ function makeAnimInstance(requireFn, play, options) {
     events[n] = makeEmitter(Event, n);
   }
   let stopped = false;
+  let started = false;
   let raf = 0;
   const emitStopped = () => {
     if (stopped) return;
@@ -258,14 +259,20 @@ function makeAnimInstance(requireFn, play, options) {
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     try { events.stopped.emit(); } catch (_) { /* no listener */ }
   };
-  if (play) {
+  // Start (or restart) playback: emit `started`, schedule `stopped` for the
+  // computed real duration, and kick off body+eye DOF sampling. Used both by
+  // the createAndPlayAnimation initial-play (play=true) and the createAnimation
+  // + instance.play(...) deferred-play path (where the skill drives playback
+  // explicitly after acquiring the instance — most embodied-dialog timelines
+  // take this path).
+  const startPlayback = () => {
+    if (started || stopped) return;
+    started = true;
     const dataObj = options && options.data;
     const channels = (dataObj && dataObj.content && Array.isArray(dataObj.content.channels)) ? dataObj.content.channels : null;
     const channelCount = channels ? channels.length : 0;
     const channelDofs = channels ? channels.slice(0, 6).map((c) => c.dofName || c.dof).join(',') : '';
     Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
-    // The eye renders the .keys locally over its duration; signal completion when
-    // that elapses so the playback promise resolves and the skill advances.
     const dur = animDurationMs(options);
     console.log('[live-eye] anim play: src=', (options && options.src) || '<inline>', 'dur=', dur, 'ms ch=', channelCount, channelCount ? '(' + channelDofs + (channels.length > 6 ? ',...' : '') + ')' : '');
     setTimeout(emitStopped, dur);
@@ -275,13 +282,17 @@ function makeAnimInstance(requireFn, play, options) {
     // jibo-keyframes.computeAnimObject produces: { content: { channels: [{ dofName,
     // times, values }] } } — value at time t is a piecewise-linear sample.
     startDofPlayback(options, dur, () => stopped);
-  }
+  };
+  if (play) startPlayback();
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
     get(t, p) {
       if (p === 'events') return events;
       if (p === 'state') return 'INVALID';
       if (p === 'then' || typeof p === 'symbol') return undefined;
+      // Real AnimationInstance.play() begins playback; do the same here for
+      // animations created via createAnimation() and played explicitly.
+      if (p === 'play') return () => { startPlayback(); return Promise.resolve(); };
       if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { emitStopped(); return Promise.resolve(); };
       if (typeof p === 'string' && PROMISE_RETURNING_METHODS.has(p)) return () => Promise.resolve();
       if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
