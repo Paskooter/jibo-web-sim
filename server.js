@@ -135,11 +135,16 @@ server.on('upgrade', (req, sock, head) => {
     let opened = false;
     const cleanup = () => { try { clientWS.close(); } catch (_) {} try { upstreamWS.close(); } catch (_) {} };
     upstreamWS.on('open', () => { opened = true; });
-    // Buffer client frames until upstream is open.
+    // The hub sends FRAME_TEXT (ClientCloudConnection.cpp:242). The `ws` library
+    // delivers all frames as Buffer by default, and forwarding a Buffer via
+    // clientWS.send(buf) emits a BINARY frame -- browsers then expose ev.data as
+    // a Blob and jetstream-client's JSON.parse fails. Honor isBinary in both
+    // directions: relay text as string, binary as Buffer.
+    const relay = (sink, data, isBinary) => { try { sink.send(isBinary ? data : data.toString('utf8'), { binary: !!isBinary }); } catch (_) { /* sink closed */ } };
     const pending = [];
-    clientWS.on('message', (data) => { if (opened) { try { upstreamWS.send(data); } catch (_) {} } else pending.push(data); });
-    upstreamWS.on('open', () => { for (const d of pending) { try { upstreamWS.send(d); } catch (_) {} } pending.length = 0; });
-    upstreamWS.on('message', (data) => { try { clientWS.send(data); } catch (_) {} });
+    clientWS.on('message', (data, isBinary) => { if (opened) relay(upstreamWS, data, isBinary); else pending.push([data, isBinary]); });
+    upstreamWS.on('open', () => { for (const [d, b] of pending) relay(upstreamWS, d, b); pending.length = 0; });
+    upstreamWS.on('message', (data, isBinary) => relay(clientWS, data, isBinary));
     upstreamWS.on('close', cleanup);
     clientWS.on('close', cleanup);
     upstreamWS.on('error', (e) => { try { clientWS.send(JSON.stringify({ type: 'ERROR', data: { message: 'upstream WS error: ' + e.message } })); } catch (_) {} cleanup(); });

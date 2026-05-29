@@ -425,9 +425,11 @@ function _buildHubMessages(path, body, transID) {
   const ts = Date.now();
   const mid = () => 'mid:' + _hubUuid();
   if (path === '/listen/start_local_turn') {
-    // LhubClient.cc picks LISTEN.mode by whether the skill is sending pre-resolved
-    // input: CLIENT_NLU (typed chat / NLU payload), CLIENT_ASR (typed transcript)
-    // or the default audio path. The hub rejects 'turn'.
+    // Per jiboV2/jetstream LhubClient.cc the actual hub sequence for typed input
+    // is LISTEN -> CONTEXT -> CLIENT_NLU (or CLIENT_ASR). The hub's state machine
+    // (pegasus packages/hub ListenTransactionHandler.ts) reaches NLU only after
+    // CLIENT_NLU lands while in WAIT_CLIENT_NLU. LISTEN.mode picks which
+    // pre-resolved-input the hub waits for: CLIENT_NLU, CLIENT_ASR, or ASR.
     const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : 'ASR');
     const msgs = [{
       type: 'LISTEN', msgID: mid(), transID, ts,
@@ -446,6 +448,12 @@ function _buildHubMessages(path, body, transID) {
         },
       },
     }];
+    // Minimal CONTEXT — the hub's MessagePreProcessor auto-fills `general` from
+    // socket.auth when absent; we provide an empty skill/runtime block.
+    msgs.push({
+      type: 'CONTEXT', msgID: mid(), transID, ts,
+      data: { general: { lang: 'en' }, runtime: {}, skill: {} },
+    });
     if (body.clientNLU != null) {
       const nluData = typeof body.clientNLU === 'string'
         ? (() => { try { return JSON.parse(body.clientNLU); } catch (_) { return { intent: body.clientNLU }; } })()
