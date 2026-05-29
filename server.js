@@ -2,6 +2,7 @@
 // files. No build step, no bundler — index.html + ESM does the rest.
 
 import express from 'express';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -68,6 +69,41 @@ app.get('/__list', (req, res) => {
   };
   walk(baseAbs, root.replace(/\/$/, ''));
   res.json({ files });
+});
+
+// Same-origin proxy to a Pegasus cloud backend, to dodge CORS. The iframe sends
+// `/__cloud<path>` with `X-Cloud-Upstream: <host>:<port>` (or `?upstream=`); we
+// forward the request to that upstream and stream the response back. Browsers
+// don't enforce CORS on the server-to-server hop, so the original jibo cloud
+// (designed for Electron, no CORS) works unmodified through the proxy.
+app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
+  const upstream = String(req.headers['x-cloud-upstream'] || req.query.upstream || '').trim();
+  if (!upstream || !/^[\w.-]+(:\d+)?$/.test(upstream)) {
+    res.status(400).type('text/plain').send('missing or invalid X-Cloud-Upstream');
+    return;
+  }
+  const [uhost, uportStr] = upstream.split(':');
+  const uport = uportStr ? Number(uportStr) : 80;
+  // Forward all headers except hop-by-hop + the cloud-upstream pointer itself.
+  const fwdHeaders = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (/^(host|connection|content-length|x-cloud-upstream|origin|referer)$/i.test(k)) continue;
+    fwdHeaders[k] = v;
+  }
+  fwdHeaders.host = upstream;
+  const upreq = http.request({
+    host: uhost, port: uport, path: req.url || '/', method: req.method, headers: fwdHeaders,
+  }, (upres) => {
+    res.status(upres.statusCode || 502);
+    for (const [k, v] of Object.entries(upres.headers)) {
+      if (/^(transfer-encoding|connection)$/i.test(k)) continue;
+      res.setHeader(k, v);
+    }
+    upres.pipe(res);
+  });
+  upreq.on('error', (e) => { res.status(502).type('text/plain').send(`upstream error: ${e.message}`); });
+  if (req.body && req.body.length) upreq.write(req.body);
+  upreq.end();
 });
 
 app.use(express.static(__dirname, { extensions: ['html'] }));

@@ -409,20 +409,38 @@ function makeHttpClient() {
   function request(options, cb) {
     const reqHandlers = {};
     const body = [];
-    const url = `http${options.protocol === 'https:' ? 's' : ''}://${options.host || options.hostname || ''}${options.port ? ':' + options.port : ''}${options.path || '/'}`;
+    const upstreamHost = options.host || options.hostname || '';
+    const upstreamPort = options.port || '';
+    const directUrl = `http${options.protocol === 'https:' ? 's' : ''}://${upstreamHost}${upstreamPort ? ':' + upstreamPort : ''}${options.path || '/'}`;
     const method = (options.method || 'GET').toUpperCase();
     let sent = false;
     function go() {
       if (sent) return; sent = true;
-      const init = { method, headers: options.headers || {} };
+      const init = { method, headers: Object.assign({}, options.headers || {}) };
+      // Route requests to the configured backend (e.g. pegasus.jibo) through the
+      // sim server's same-origin /__cloud proxy — the iframe is cross-origin to
+      // pegasus and the jibo cloud doesn't set CORS (it was designed for Electron
+      // which doesn't enforce it). The proxy strips that boundary.
+      let url = directUrl;
+      const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
+      if (server && upstreamHost === server) {
+        url = `/__cloud${options.path || '/'}`;
+        init.headers['X-Cloud-Upstream'] = `${upstreamHost}${upstreamPort ? ':' + upstreamPort : ''}`;
+      }
       if (method !== 'GET' && method !== 'HEAD' && body.length) init.body = body.join('');
       fetch(url, init).then(async (res) => {
         let text = await res.text();
-        // Translate Pegasus hub's `msgID` to jetstream-client's expected `requestID`.
+        // Hub responses use msgID/transID; jetstream-client expects requestID.
+        // Per jiboV2/jetstream LhubClient.cc the robot's requestID == hub's
+        // transID, so prefer transID; msgID is a per-message fallback.
         if (text && text.charCodeAt(0) === 123 /* { */) {
           try {
             const obj = JSON.parse(text);
-            if (obj && obj.msgID && !obj.requestID) { obj.requestID = obj.msgID; text = JSON.stringify(obj); }
+            if (obj && !obj.requestID) {
+              if (obj.transID) obj.requestID = obj.transID;
+              else if (obj.msgID) obj.requestID = obj.msgID;
+              text = JSON.stringify(obj);
+            }
           } catch (_) { /* not JSON, leave as-is */ }
         }
         const respHandlers = {};
@@ -483,17 +501,23 @@ function makeFakeWs() {
     let real;
     try { real = new window.WebSocket(url); } catch (e) { setTimeout(() => sock.emit('error', e), 0); return sock; }
     real.onopen = () => { sock.readyState = 1; sock.emit('open'); };
-    // Pegasus hub responses use `msgID`; jetstream-client expects `requestID` and
-    // rejects every event missing it (then times out at 60s). Translate inbound
-    // events: alias msgID -> requestID (and final -> eos / data.eos) so the rest
-    // of the protocol can decode them.
+    // The pegasus hub speaks Hubmsg {type, ts, msgID, transID, ...} on its
+    // socket; the robot-side jetstream-client expects WSmsg {type, ts, requestID,
+    // transID, ...} and rejects events lacking requestID. Per jiboV2/jetstream
+    // LhubClient.cc, when the original request_id isn't "GLOBAL", the jetstream
+    // service reuses request_id AS the transaction_id — so the robot's requestID
+    // ↔ the hub's transID. Mirror that: alias transID -> requestID (msgID is just
+    // a per-message id and isn't the correlation key, although we fall back to it
+    // for messages that lack a transID).
     real.onmessage = (ev) => {
       let data = ev.data;
       if (typeof data === 'string' && data.charCodeAt(0) === 123 /* { */) {
         try {
           const obj = JSON.parse(data);
-          if (obj && obj.msgID && !obj.requestID) obj.requestID = obj.msgID;
-          if (obj && obj.final === true && obj.data && obj.data.eos === undefined) obj.data.eos = true;
+          if (obj && !obj.requestID) {
+            if (obj.transID) obj.requestID = obj.transID;
+            else if (obj.msgID) obj.requestID = obj.msgID;
+          }
           data = JSON.stringify(obj);
         } catch (_) { /* not JSON, pass through */ }
       }
