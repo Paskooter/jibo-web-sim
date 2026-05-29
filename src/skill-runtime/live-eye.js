@@ -45,6 +45,22 @@ export async function prepareLiveEye(requireFn, skillDir) {
   const base = `${location.origin}${skillDir}/node_modules/animation-utilities/res/geometry-config/`;
   const tdir = `${base}P1.0/textures/`;
 
+  // Patch JiboConfig so callers that construct it with no args (notably
+  // jibo-expression-client/createDOFs) get a usable HTTP base URL instead of
+  // falling back to find-root(__dirname) — which in the browser bundle resolves
+  // to the page origin without a protocol, and FileTools.loadText then forces
+  // `file:` and gets browser-blocked ("Not allowed to load local resource").
+  // Wrap the constructor so callers that DO pass a base keep their behavior.
+  if (!anim.JiboConfig.__webPatched) {
+    const Real = anim.JiboConfig;
+    const Patched = function JiboConfig(baseGeometryURL, robotVersion) {
+      return new Real(baseGeometryURL || base, robotVersion);
+    };
+    Patched.__webPatched = true;
+    Patched.prototype = Real.prototype;
+    anim.JiboConfig = Patched;
+  }
+
   let idleAnim = null;
   try { idleAnim = await fetch(`${base}P1.0/jibo_default.anim`).then((r) => r.json()); } catch (_) { /* optional */ }
 
@@ -133,6 +149,65 @@ function animDurationMs(options) {
   return 1500;
 }
 
+// Sample one channel at time t (clamped at the ends) — same algorithm as
+// src/anim/animation.js sampleChannel, but inlined to keep this module's
+// dependency-free posture.
+function sampleChannel(times, values, t) {
+  const n = times.length;
+  if (n === 0) return 0;
+  if (t <= times[0]) return values[0];
+  if (t >= times[n - 1]) return values[n - 1];
+  let i = 1;
+  while (i < n && times[i] < t) i++;
+  const t0 = times[i - 1], t1 = times[i];
+  const a = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  return values[i - 1] + (values[i] - values[i - 1]) * a;
+}
+
+// Drive both the body rig (via window.parent.postMessage 'dofs') and the live
+// eye (jibo.face.eye.display) from animation channel data over `durMs`. Stops
+// when isStopped() returns true. Body DOFs ('*Section_r', 'led_*') go to the
+// host viewport; everything else (eye, screen, overlay) goes to the eye.
+function startDofPlayback(options, durMs, isStopped) {
+  const data = options && options.data;
+  const channels = (data && data.content && Array.isArray(data.content.channels)) ? data.content.channels : null;
+  if (!channels || channels.length === 0) return;
+  // Active animation DOFs are exposed to driveEye() so the eye-tick loop mixes
+  // them in alongside the idle pose.
+  if (!window.__activeAnimDofs) window.__activeAnimDofs = null;
+  const startMs = performance.now();
+  const durSec = durMs / 1000;
+  const BODY_DOFS = new Set(['bottomSection_r', 'middleSection_r', 'topSection_r', 'led_r', 'led_g', 'led_b']);
+  const tick = () => {
+    if (isStopped()) { window.__activeAnimDofs = null; return; }
+    const elapsedSec = (performance.now() - startMs) / 1000;
+    const t = Math.min(elapsedSec, durSec);
+    const sampled = {};
+    for (const ch of channels) {
+      try {
+        const name = ch.dofName || ch.dof;
+        if (!name) continue;
+        sampled[name] = sampleChannel(ch.times || [], ch.values || [], t);
+      } catch (_) { /* malformed channel */ }
+    }
+    // Split into body (post to host) vs eye/screen (apply locally via driveEye).
+    const bodyDofs = {};
+    let hasBody = false;
+    for (const k of Object.keys(sampled)) {
+      if (BODY_DOFS.has(k)) { bodyDofs[k] = sampled[k]; hasBody = true; }
+    }
+    if (hasBody) {
+      try { window.parent.postMessage({ __jibo: true, kind: 'dofs', dofs: bodyDofs }, '*'); } catch (_) { /* no parent */ }
+    }
+    // The eye DOFs are mixed into driveEye's per-frame frame so motion stays
+    // composited with the idle bob.
+    window.__activeAnimDofs = sampled;
+    if (t < durSec) requestAnimationFrame(tick);
+    else window.__activeAnimDofs = null;
+  };
+  requestAnimationFrame(tick);
+}
+
 function makeAnimInstance(requireFn, play, options) {
   let Event;
   try { Event = requireFn('jibo-typed-events').Event; } catch (_) { /* fall back to local emitter */ }
@@ -141,12 +216,25 @@ function makeAnimInstance(requireFn, play, options) {
     events[n] = makeEmitter(Event, n);
   }
   let stopped = false;
-  const emitStopped = () => { if (stopped) return; stopped = true; try { events.stopped.emit(); } catch (_) { /* no listener */ } };
+  let raf = 0;
+  const emitStopped = () => {
+    if (stopped) return;
+    stopped = true;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    try { events.stopped.emit(); } catch (_) { /* no listener */ }
+  };
   if (play) {
     Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
     // The eye renders the .keys locally over its duration; signal completion when
     // that elapses so the playback promise resolves and the skill advances.
-    setTimeout(emitStopped, animDurationMs(options));
+    const dur = animDurationMs(options);
+    setTimeout(emitStopped, dur);
+    // Sample the animation's channels per frame and drive both the host body rig
+    // (postMessage 'dofs' for body sections + LED ring) and the local eye (push
+    // DOFs into jibo.face.eye.display). options.data is the same shape
+    // jibo-keyframes.computeAnimObject produces: { content: { channels: [{ dofName,
+    // times, values }] } } — value at time t is a piecewise-linear sample.
+    startDofPlayback(options, dur, () => stopped);
   }
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
@@ -447,6 +535,19 @@ export function driveEye(jibo, prep) {
       const t = performance.now() / 1000;
       const frame = Object.assign({}, dofs);
       frame.eyeSubRootBn_t_2 = (dofs.eyeSubRootBn_t_2 || 0) + Math.sin(t * 1.2) * 0.0015;
+      // Overlay any active skill-driven animation DOFs (eye/screen/overlay only —
+      // body sections go to the host viewport). startDofPlayback() in this file
+      // writes into window.__activeAnimDofs; consume them as a per-frame mix-in
+      // so the eye actually moves during expression.createAndPlayAnimation.
+      const active = window.__activeAnimDofs;
+      if (active) {
+        for (const k of Object.keys(active)) {
+          // Skip body+LED DOFs (handled by the host viewport).
+          if (k === 'bottomSection_r' || k === 'middleSection_r' || k === 'topSection_r' ||
+              k === 'led_r' || k === 'led_g' || k === 'led_b') continue;
+          frame[k] = active[k];
+        }
+      }
       if (eye.display) { try { eye.display(performance.now(), frame, meta); } catch (_) { /* eye not ready */ } }
     }
     requestAnimationFrame(tick);

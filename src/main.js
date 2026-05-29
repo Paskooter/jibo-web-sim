@@ -197,6 +197,21 @@ async function startSkillRuntime() {
       } catch (_) { reply(); }
     } else if (m.kind === 'speak-stop' && synth) {
       try { synth.cancel(); } catch (_) { /* nothing speaking */ }
+    } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
+      // jibo-be animation playback (expression.createAndPlayAnimation) — the
+      // skill-runtime samples the animation's channels per frame and posts the
+      // resulting DOF map here so the body rig actually moves. Only the body
+      // sections + LED ring channels apply to the host viewport; eye DOFs are
+      // driven separately inside the iframe via jibo.face.eye.display.
+      const d = m.dofs;
+      try {
+        if ('bottomSection_r' in d) viewport.rig.setDof('bottomSection_r', d.bottomSection_r);
+        if ('middleSection_r' in d) viewport.rig.setDof('middleSection_r', d.middleSection_r);
+        if ('topSection_r' in d) viewport.rig.setDof('topSection_r', d.topSection_r);
+        if (('led_r' in d || 'led_g' in d || 'led_b' in d) && viewport.rig.setLEDColor) {
+          viewport.rig.setLEDColor(d.led_r ?? 0.31, d.led_g ?? 0.79, d.led_b ?? 1.0);
+        }
+      } catch (_) { /* rig not ready */ }
     }
   });
 
