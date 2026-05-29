@@ -193,46 +193,63 @@ export class GlobalManagerService {
       return;
     }
 
-    // The hub may set match.onRobot=false for cloud-container skills
-    // (chitchat-skill / personal-report-skill / news / answer). Those names
-    // never appear in @be/be's skills map (it keys by @be/* package names),
-    // so a naive redirect crashes Be.redirect with "Cannot read properties
-    // of undefined (reading 'assetPack')". For those, the local handler is
-    // @be/nimbus — it reads match.cloudSkill + awaits cloudSkillResponse
-    // to execute the cloud container's SKILL_ACTION payload.
+    // Cloud-container skills (chitchat-skill / personal-report-skill / news /
+    // answer) have match.onRobot=false and a name not in @be/be's skills
+    // map (which is keyed by @be/* package names). The local handler is
+    // @be/nimbus — it reads match.cloudSkill and awaits
+    // listenResult.cloudSkillResponse (a Promise<SKILL_ACTION-data>) which
+    // jetstream-client already stamped onto `result.cloudSkillResponse` in
+    // emitLocalTurnResult (see jetstream-client.js line ~480).
     //
-    // Two fields drive nimbus's open():
-    //  - match.skillID — rewritten to '@be/nimbus' so be/index.js's
-    //    skillRelaunch handler can find this.skills[skillID].
-    //  - listenResult.cloudSkillResponse — a Promise<SKILL_ACTION-data>.
-    //    NOT set here; GlobalEvents.onSkillRelaunch (jibo.js:19634) stamps
-    //    it from `jetstream.getCloudSkillResponse(transID)` IFF
-    //    !match.onRobot. So we MUST leave match.onRobot=false (not flip
-    //    it to true) — otherwise nimbus opens with an undefined
-    //    cloudSkillResponse and throws "Nimbus launched without complete
-    //    ListenResult; unable to proceed!".
-    // The original cloud-skill name is preserved on match.cloudSkill so
-    // nimbus reads it in its Open state.
+    // CRITICAL: we cannot round-trip through the /globals JSON broadcast for
+    // cloud matches. JSON.stringify strips the Promise, and
+    // GlobalEvents.onSkillRelaunch (jibo.js:19634) then calls
+    // `jetstream.getCloudSkillResponse(transID)` to re-add the entry — but
+    // the registry's add() DELETES any existing entry and returns its
+    // promise, so the SKILL_ACTION arriving later finds no entry and
+    // resolves a different one entirely. Nimbus's await sits on the now-
+    // orphan promise until the 8s "Cloud Skill Response Timeout" fires.
+    // Skirt this by emitting skillRelaunch directly with the in-memory
+    // result (cloudSkillResponse Promise intact) — same as what the real
+    // SSM listen-service does when the cloud-match handler runs in-process.
+    const rawMatchID = (result.match && result.match.skillID) || skillID;
+    const isLocalBeSkill = typeof rawMatchID === 'string' && rawMatchID.startsWith('@be/');
+    const isCloudSkill = (result.match && result.match.onRobot === false) || !isLocalBeSkill;
+
+    if (isCloudSkill) {
+      const directResult = result;       // KEEP the in-memory ListenResult with cloudSkillResponse
+      directResult.match = directResult.match || {};
+      directResult.match.cloudSkill = rawMatchID;
+      directResult.match.skillID = '@be/nimbus';
+      // onRobot stays false — Be.index.js redirect doesn't read it, but
+      // anything downstream that does will see the truthful "cloud" mark.
+      if (directResult.nlu && !directResult.nlu.skill) directResult.nlu.skill = '@be/nimbus';
+      console.log('[global-manager] -> skillRelaunch.emit @be/nimbus (cloud=' + rawMatchID + ') direct');
+      try {
+        if (this._jsApi && this._jsApi.events) {
+          // (no-op: just for diagnostics; the real handle is below)
+        }
+        const ge = (typeof window !== 'undefined' && window.jibo && window.jibo.globalEvents);
+        if (ge && ge.skillRelaunch && typeof ge.skillRelaunch.emit === 'function') {
+          ge.skillRelaunch.emit(directResult);
+        } else {
+          console.warn('[global-manager] jibo.globalEvents.skillRelaunch not available; falling back to /globals');
+          const enriched = this._serializeResult(directResult);
+          this._broadcast({ status: 'OK', message: 'skill-relaunch', result: enriched });
+        }
+      } catch (e) { console.warn('[global-manager] direct skillRelaunch failed:', e && e.message); }
+      return;
+    }
+
+    // On-robot @be/* skill: the /globals broadcast path is safe — there's
+    // no Promise to preserve, onSkillRelaunch's getCloudSkillResponse only
+    // fires when !match.onRobot, and the redirect can find this.skills[id].
     const enriched = this._serializeResult(result);
     enriched.match = enriched.match || {};
-    const rawMatch = enriched.match.skillID || skillID;
-    const isLocalBeSkill = typeof rawMatch === 'string' && rawMatch.startsWith('@be/');
-    let routedSkillID;
-    if (enriched.match.onRobot === false || !isLocalBeSkill) {
-      enriched.match.cloudSkill = rawMatch;
-      routedSkillID = '@be/nimbus';
-      enriched.match.skillID = '@be/nimbus';
-      enriched.match.onRobot = false;     // keep so cloudSkillResponse gets wired
-    } else {
-      routedSkillID = rawMatch;
-      enriched.match.skillID = rawMatch;
-      if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
-    }
-    // Mirror the nlu.skill field that @be/be-framework.onSkillRelaunch reads
-    // (skillData.nlu.skill — see be-framework lib line ~190).
-    if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = routedSkillID;
-    console.log('[global-manager] -> skill-relaunch', routedSkillID, enriched.match.cloudSkill ? '(cloud=' + enriched.match.cloudSkill + ')' : '', '(clients=' + this.clients.size + ')');
-
+    enriched.match.skillID = rawMatchID;
+    if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
+    if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = rawMatchID;
+    console.log('[global-manager] -> skill-relaunch', rawMatchID, '(clients=' + this.clients.size + ')');
     this._broadcast({ status: 'OK', message: 'skill-relaunch', result: enriched });
   }
 
