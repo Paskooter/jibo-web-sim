@@ -7,6 +7,7 @@
 // work (jibo-be connects, calls resolve) without the per-crash hacks.
 
 import { ServiceBus } from './service-bus.js';
+import { GlobalManagerService } from './global-manager.js';
 
 // A default service impl: RPCs resolve to undefined (degrade gracefully), no events.
 function stubService(name) {
@@ -116,20 +117,27 @@ const REAL_HTTP = {
 
 // Service names jibo-be discovers/connects to (from skills-service-manager + the
 // runtime's lookups). 'expression' is the eye/animation engine we build on
-// animation-utilities; 'server' is the notifications endpoint.
+// animation-utilities; 'server' is the notifications endpoint; 'global-manager'
+// is the cloud-event-to-skill-relaunch bridge that drives Be.redirect.
 const SERVICE_NAMES = [
   'registry', 'system-manager', 'kb', 'body', 'expression',
   'tts', 'asr', 'listen', 'nlu', 'lps', 'media', 'notifications',
   'skills-service', 'dev-shell', 'performance', 'wifi', 'server',
   'media-proxy', 'jetstream', 'gl', 'error-service', 'secure-transfer',
   'location', 'im', 'emotion', 'embodied', 'context', 'autobot', 'action', 'volume',
+  'global-manager',
 ];
+
+// Real impls bundled with the bus (overlay onto REAL_HTTP + caller realImpls).
+const REAL_SERVICES = {
+  'global-manager': new GlobalManagerService(),
+};
 
 // Build + install the bus with all services. `realImpls` maps name -> impl to
 // override stubs as services get ported.
 export function installServiceBus(requireFn, realImpls = {}) {
   const bus = new ServiceBus();
-  const impls = Object.assign({}, REAL_HTTP, realImpls);
+  const impls = Object.assign({}, REAL_HTTP, REAL_SERVICES, realImpls);
   for (const name of SERVICE_NAMES) {
     bus.register(name, impls[name] || stubService(name));
   }
