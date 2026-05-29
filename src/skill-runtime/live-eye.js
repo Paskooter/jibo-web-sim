@@ -444,6 +444,38 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
+  // AnimDB: jibo's AnimDBPlugin calls `resolveAnimDB(jibo)` which walks
+  // node's Module._resolveFilename from process.cwd() to find
+  // jibo-anim-db-animations. In the browser that resolver has no usable cwd,
+  // so resolveAnimDB returns undefined and the plugin inits an EMPTY AnimDB
+  // (the "Module 'jibo-anim-db-animations' not found" warning at boot).
+  // With an empty AnimDB, every `<anim cat='dance' filter='&(music)'/>` tag
+  // in skill prompts resolves to "no matching animations" and gets dropped
+  // from the timeline — so the dance speak runs only the per-word posture
+  // shifts and Jibo never actually dances.
+  // Re-init with the known browser-relative animdb.json path so the
+  // ~66000-line manifest gets indexed and category/meta queries return.
+  try {
+    if (jibo.animDB && typeof jibo.animDB.init === 'function') {
+      const skillDir = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
+      if (skillDir) {
+        const animDBPath = `${skillDir}/node_modules/jibo-anim-db-animations/animdb.json`;
+        const empty = !jibo.animDB.isInitialized || !jibo.animDB.isInitialized() ||
+                      (jibo.animDB.getAnimationNames && jibo.animDB.getAnimationNames().length === 0);
+        if (empty && !jibo.animDB.__reInited) {
+          jibo.animDB.__reInited = true;
+          const r = jibo.animDB.init(jibo, animDBPath);
+          if (r && typeof r.then === 'function') {
+            r.then(() => {
+              const n = jibo.animDB.getAnimationNames ? jibo.animDB.getAnimationNames().length : -1;
+              console.log('[live-eye] animDB re-init OK, animations indexed:', n);
+            }).catch((e) => console.warn('[live-eye] animDB.init:', e && e.message));
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn('[live-eye] animDB init failed:', e.message); }
+
   // Expression plugin: subscribes the local face renderer to the expression
   // service's `dofs` events. Without it, jibo.face.eye won't reflect any
   // cloud-driven expression cues. Connection-free if we just bind the local
