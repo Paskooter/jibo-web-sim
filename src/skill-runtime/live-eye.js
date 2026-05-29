@@ -203,9 +203,44 @@ function sampleChannel(times, values, t) {
 // eye (jibo.face.eye.display) from animation channel data over `durMs`. Stops
 // when isStopped() returns true. Body DOFs ('*Section_r', 'led_*') go to the
 // host viewport; everything else (eye, screen, overlay) goes to the eye.
-function startDofPlayback(options, durMs, isStopped) {
+// `events` (optional) is the AnimationInstance's events container — the data's
+// timed event list (computeAnimObject.content.events) is fired into it as the
+// clock crosses each event's time so KeysAnimation.onPlayAudio (subscribed to
+// events.audio) triggers Sound.play() at the right beat — without it the
+// dance plays visually but is silent.
+function startDofPlayback(options, durMs, isStopped, events) {
   const data = options && options.data;
   const channels = (data && data.content && Array.isArray(data.content.channels)) ? data.content.channels : null;
+  // Sorted event queue; each entry tracks if it's been fired.
+  const timedEvents = (data && data.content && Array.isArray(data.content.events))
+    ? data.content.events.slice().sort((a, b) => (a.time || 0) - (b.time || 0))
+    : [];
+  let nextEventIdx = 0;
+  const fireEventsUpTo = (tSec) => {
+    while (nextEventIdx < timedEvents.length && (timedEvents[nextEventIdx].time || 0) <= tSec) {
+      const ev = timedEvents[nextEventIdx++];
+      if (!events) continue;
+      try {
+        // computeAnimObject's eventName 'play-audio' / 'play-pixi' maps to the
+        // emitter names jibo-expression-client.AnimationInstance.onEvent uses:
+        //   play-audio  -> events.audio  (KeysAnimation.onPlayAudio -> Sound.play)
+        //   play-pixi   -> events.pixi   (PIXI timeline overlay)
+        //   HOLD_SAFE   -> events.holdSafe
+        if (ev.eventName === 'play-audio' && events.audio && events.audio.emit) {
+          events.audio.emit(ev.payload || {});
+        } else if (ev.eventName === 'play-pixi' && events.pixi && events.pixi.emit) {
+          events.pixi.emit(ev.payload || {});
+        } else if (ev.eventName === 'HOLD_SAFE' && events.holdSafe && events.holdSafe.emit) {
+          events.holdSafe.emit();
+        } else if (events.general && events.general.emit) {
+          events.general.emit(ev);
+        }
+      } catch (_) { /* event listener threw */ }
+    }
+  };
+  // Fire any events at t=0 immediately so an opening play-audio (music tracks
+  // typically have AudioEvent at frame 0) starts the very first frame.
+  fireEventsUpTo(0);
   if (!channels || channels.length === 0) return;
   // Active animation DOFs are exposed to driveEye() so the eye-tick loop mixes
   // them in alongside the idle pose.
@@ -237,6 +272,8 @@ function startDofPlayback(options, durMs, isStopped) {
     // The eye DOFs are mixed into driveEye's per-frame frame so motion stays
     // composited with the idle bob.
     window.__activeAnimDofs = sampled;
+    // Fire any timed events whose time has now elapsed (audio cues etc.)
+    fireEventsUpTo(t);
     if (t < durSec) requestAnimationFrame(tick);
     else window.__activeAnimDofs = null;
   };
@@ -281,7 +318,10 @@ function makeAnimInstance(requireFn, play, options) {
     // DOFs into jibo.face.eye.display). options.data is the same shape
     // jibo-keyframes.computeAnimObject produces: { content: { channels: [{ dofName,
     // times, values }] } } — value at time t is a piecewise-linear sample.
-    startDofPlayback(options, dur, () => stopped);
+    // Pass the events container so the data's timed events (play-audio →
+    // music playback via KeysAnimation.onPlayAudio → Sound.play → host audio)
+    // fire at the right beat.
+    startDofPlayback(options, dur, () => stopped, events);
   };
   if (play) startPlayback();
   const fn = function () { return tolerant(); };
