@@ -469,9 +469,20 @@ function _buildHubMessages(path, body, transID) {
       character: { motivation: { playful: 0, social: 0 }, emotion: { confidence: 0, valence: 0, name: 'NEUTRAL' } },
       dialog: { referent: null },
     };
+    // CONTEXT.data.general.release is read by the hub's DecisionMediator on
+    // phoenix-branch pegasus (DecisionMediator.ts:17). If release < '1.9.0',
+    // it overrides certain IR decisions — notably rewriting `report-skill` +
+    // requestNews into `{skillID:'news'}`, which doesn't exist on phoenix
+    // (skills-local.json removed `news_manifest` in commit cb99a976 when news
+    // moved into answer-skill RSS). MessagePreProcessor auto-fills general
+    // {accountID,robotID,lang,remoteAddress} but NOT release, so without us
+    // stamping a value the mediator runs and breaks news. Provide a current
+    // release so the mediator stays out of the way and the IR decision
+    // (report-skill) stands.
+    const generalRelease = (typeof window !== 'undefined' && window.__JIBO_RELEASE__) || '1.9.0';
     const msgs = [
       { type: 'LISTEN', msgID: mid(), ts, data },
-      { type: 'CONTEXT', msgID: mid(), ts, data: { general: null, runtime: _runtime, skill: null } },
+      { type: 'CONTEXT', msgID: mid(), ts, data: { general: { release: generalRelease }, runtime: _runtime, skill: null } },
     ];
     if (body.clientNLU != null) {
       // NLUResult shape per @jibo/interfaces nlu.ts: { rules, intent, entities }.
