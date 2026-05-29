@@ -15,7 +15,7 @@
 
 import { installJiboShim } from './jibo-shim.js';
 import { createRequire } from './cjs-require.js';
-import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, installWebSpeech, connectCloud } from './live-eye.js';
+import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, connectCloud } from './live-eye.js';
 import { installServiceBus } from './services/index.js';
 import { installKbService } from './services/kb-service.js';
 
@@ -127,7 +127,7 @@ async function bootReal() {
     let waited = 0;
     const wait = setInterval(() => {
       waited += 100;
-      if (window.jibo && window.jibo.face) { clearInterval(wait); driveEye(window.jibo, eye); installWebSpeech(window.jibo); connectCloud(req); }
+      if (window.jibo && window.jibo.face) { clearInterval(wait); driveEye(window.jibo, eye); connectCloud(req); }
       else if (waited > 20000) { clearInterval(wait); console.warn('[boot] real runtime: jibo.face never appeared'); }
     }, 100);
   }

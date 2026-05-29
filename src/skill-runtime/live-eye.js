@@ -279,54 +279,12 @@ export function installExpressionStubs(jibo, requireFn) {
   } catch (e) { console.warn('[live-eye] installExpressionStubs failed:', e.message); }
 }
 
-// Give Jibo a real voice with the browser's built-in Web Speech API. The original
-// TTS is a native C++ engine + ~680MB voice model (not browser-runnable), so the
-// embodied-dialog speak pipeline can only build timing/visemes offline, never
-// audio ("TTS Service is unavailable"). Replace jibo.embodied.speech.speak — the
-// MIM speakDelegate — with a SpeechSynthesis-backed speak: strip SSML to plain
-// text, utter it, and resolve when it ends so the skill paces to real speech. A
-// length-estimated fallback timer guarantees we resolve even when 'end' never
-// fires (headless/no audio device), so speaking skills never hang.
-export function installWebSpeech(jibo) {
-  try {
-    const sp = jibo && jibo.embodied && jibo.embodied.speech;
-    if (!sp || sp.__webspeech) return;
-    sp.__webspeech = true;
-
-    // Speech runs in the HOST window, not here: the skill iframe is sandboxed, so
-    // SpeechSynthesis there has no user activation and stays silent. We post the
-    // text to the host (main.js), which speaks it and posts 'speak-done' back when
-    // it finishes so the skill paces to real speech. A generous length-based
-    // fallback resolves if the host never replies (so a skill never hangs).
-    let seq = 0;
-    const pending = new Map();
-    window.addEventListener('message', (ev) => {
-      const m = ev.data;
-      if (m && m.__jibo === true && m.kind === 'speak-done' && pending.has(m.id)) {
-        const fin = pending.get(m.id); pending.delete(m.id); fin();
-      }
-    });
-
-    sp.speak = function speak(text, _options, _autoRuleConfig) {
-      const plain = String(text == null ? '' : text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      return new Promise((resolve) => {
-        if (!plain) { resolve(); return; }
-        const id = ++seq;
-        let done = false;
-        const fin = () => { if (done) return; done = true; pending.delete(id); clearTimeout(timer); resolve(); };
-        pending.set(id, fin);
-        const estMs = Math.min(30000, Math.max(900, plain.length * 75 + 700));
-        const timer = setTimeout(fin, estMs + 4000); // safety net; the host's 'end' normally resolves first
-        try { parent.postMessage({ __jibo: true, kind: 'speak', id, text: plain }, '*'); } catch (_) { fin(); }
-      });
-    };
-    sp.stop = function stop() {
-      try { parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* no parent */ }
-      return Promise.resolve();
-    };
-    console.log('[live-eye] Web Speech routed to host window');
-  } catch (e) { console.warn('[live-eye] installWebSpeech failed:', e.message); }
-}
+// (installWebSpeech removed in M45 — the previous override of
+// jibo.embodied.speech.speak short-circuited the whole speak pipeline,
+// killing word-aligned eye motion + body posture shifts. Web Speech now
+// lives behind the /tts_speak HTTP endpoint (services/tts-service.js), so
+// the full embodied-dialog timeline drives expression animations against
+// real speech timing.)
 
 // When a backend server is configured in the host UI (window.__JIBO_SERVER__),
 // connect the jetstream cloud client to it. jibo-be skips jetstream init under

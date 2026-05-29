@@ -8,6 +8,7 @@
 
 import { ServiceBus } from './service-bus.js';
 import { GlobalManagerService } from './global-manager.js';
+import { ttsService } from './tts-service.js';
 
 // A default service impl: RPCs resolve to undefined (degrade gracefully), no events.
 function stubService(name) {
@@ -53,68 +54,11 @@ const REAL_HTTP = {
     '/hasBackupData': { isReady: false },
     '': {},
   }),
-  // TTS HTTP side — the NLP front of the speak pipeline (embodied-dialog), which
-  // crashed every speaking subskill (e.g. Word of the Day) when these returned {}:
-  //  - /tts_lex (getPOSTokens): Lexer wants { tokens: [<string>] } and only does
-  //    token.split(' ') for contraction/expansion, so the whole utterance as one
-  //    token suffices.
-  //  - /tts_pos_tagging (getPOSTags): NLParser wants { tokentags: [[word, pos]] }
-  //    and forEaches them (CC = conjunction, V* = verb -> prosody structure). We
-  //    have no POS model in-browser, so tag every token 'NN' (noun): the spoken
-  //    WORDS are exact; only prosody nuance is lost. Commas are special-cased by
-  //    word value upstream, so this never mis-splits sentences.
-  // Synthesis/duration endpoints degrade to {} -> speech is silent but completes.
-  tts: {
-    name: 'tts',
-    handle() { return undefined; },
-    handleHttp(method, path, body) {
-      let b = {};
-      try { b = typeof body === 'string' ? JSON.parse(body) : (body || {}); } catch (_) { /* leave empty */ }
-      if (/\/tts_lex/.test(path)) {
-        return { status: 200, body: { tokens: b.text ? [String(b.text)] : [] } };
-      }
-      if (/\/tts_pos_tagging/.test(path)) {
-        const tokens = Array.isArray(b.tokens) ? b.tokens : [];
-        return { status: 200, body: { tokentags: tokens.map((t) => [String(t), 'NN']) } };
-      }
-      // The actual speak request (jibo-service-clients _sendTTSRequest POSTs to
-      // /tts_speak and expects 204 on completion). The real path is intercepted
-      // earlier — live-eye.js installWebSpeech replaces jibo.embodied.speech.speak
-      // with a host-postMessage / SpeechSynthesis call. This HTTP endpoint runs
-      // only if some path skips that override (e.g. the lower-level behavior
-      // bypasses speakDelegate). Return 204 immediately so the callback fires
-      // cleanly with no error and the TextToSpeech behavior reaches SUCCEEDED.
-      if (/\/tts_speak/.test(path)) {
-        return { status: 204, body: '' };
-      }
-      // Stop is similarly a fire-and-forget — return 200, the client emits its
-      // own `stopped` event.
-      if (/\/tts_stop/.test(path)) {
-        return { status: 200, body: {} };
-      }
-      // Word timings (getWordTimings -> POST /tts_token_times). With no TTS engine
-      // we synthesize plausible per-word timings from the SSML prompt: strip tags,
-      // estimate each word's duration, lay them out sequentially. embodied-dialog's
-      // TimelineManager needs tokens[0].start + tokens[-1].end to build the speak
-      // timeline; _generateWordSchedule aligns by word name but tolerates misses.
-      // Speech is silent (no audio), but the pipeline completes and the skill
-      // proceeds instead of bailing to the eye.
-      if (/\/tts_token_times/.test(path)) {
-        const plain = String(b.prompt || b.text || '').replace(/<[^>]*>/g, ' ');
-        const words = plain.split(/\s+/).filter(Boolean);
-        let t = 0;
-        const tokens = words.map((w) => {
-          const dur = Math.max(0.15, w.length * 0.06);
-          const tok = { name: w, start: t, end: t + dur };
-          t += dur;
-          return tok;
-        });
-        if (!tokens.length) tokens.push({ name: '/pau/', start: 0, end: 0.1 });
-        return { status: 200, body: { tokentimes: { tokens } } };
-      }
-      return { status: 200, body: {} };
-    },
-  },
+  // TTSService — Web Speech driver behind the full embodied-dialog speak
+  // pipeline. See services/tts-service.js for the contract; /tts_speak
+  // now blocks for the real duration of speech so the timeline + per-word
+  // expression animations pace correctly.
+  tts: ttsService,
   // Body HTTP side (LED backlight / fan settings): GET /settings -> current
   // settings (200 + JSON); POST /settings -> 204.
   body: {
