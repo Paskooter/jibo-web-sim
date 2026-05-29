@@ -77,6 +77,21 @@ const REAL_HTTP = {
         const tokens = Array.isArray(b.tokens) ? b.tokens : [];
         return { status: 200, body: { tokentags: tokens.map((t) => [String(t), 'NN']) } };
       }
+      // The actual speak request (jibo-service-clients _sendTTSRequest POSTs to
+      // /tts_speak and expects 204 on completion). The real path is intercepted
+      // earlier — live-eye.js installWebSpeech replaces jibo.embodied.speech.speak
+      // with a host-postMessage / SpeechSynthesis call. This HTTP endpoint runs
+      // only if some path skips that override (e.g. the lower-level behavior
+      // bypasses speakDelegate). Return 204 immediately so the callback fires
+      // cleanly with no error and the TextToSpeech behavior reaches SUCCEEDED.
+      if (/\/tts_speak/.test(path)) {
+        return { status: 204, body: '' };
+      }
+      // Stop is similarly a fire-and-forget — return 200, the client emits its
+      // own `stopped` event.
+      if (/\/tts_stop/.test(path)) {
+        return { status: 200, body: {} };
+      }
       // Word timings (getWordTimings -> POST /tts_token_times). With no TTS engine
       // we synthesize plausible per-word timings from the SSML prompt: strip tags,
       // estimate each word's duration, lay them out sequentially. embodied-dialog's
