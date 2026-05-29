@@ -505,26 +505,56 @@ function _synthHttpJson(cb, obj) {
   }, 0);
 }
 
+// Per-turn WS to the Pegasus hub, opened through the dev server's /__cloud-ws
+// proxy so X-JIBO-transID can be set on the upgrade (browsers can't set custom
+// WS headers). Each turn gets its own WebSocket — the hub uses transID on the
+// socket itself ("Currently a new socket connection is used for each request"
+// in ListenHandler.ts). Inbound hub events are translated and forwarded onto
+// jetstream-client's long-lived eventWS fake (registered in __hubSockets), so
+// the skill receives them as if they came through one stream.
 function bridgeViaHub(options, body, cb, reqHandlers, host) {
   const key = host + (options.port ? ':' + options.port : '');
   const reg = (typeof window !== 'undefined' && window.__hubSockets) || {};
-  const ws = reg[key] || reg[host];
-  if (!ws || ws.readyState !== 1) {
-    setTimeout(() => (reqHandlers.error || []).forEach((h) => { try { h(new Error('hub WS not open for ' + key)); } catch (_) { /* */ } }), 0);
-    return;
-  }
+  const eventSock = reg[key] || reg[host];
   let bodyObj = {};
   try { bodyObj = JSON.parse(body.join('') || '{}'); } catch (_) { /* leave empty */ }
-  // For mimic_global_turn we use the literal "GLOBAL" transID per the bridge;
-  // otherwise generate a per-turn id used as both transID and the requestID we
-  // hand back to the skill (per LhubClient.cc: requestID == transaction_id).
   const transID = options.path === '/listen/mimic_global_turn' ? 'GLOBAL' : 'tid:' + _hubUuid();
   const msgs = _buildHubMessages(options.path, bodyObj, transID);
-  if (!msgs.length) {
-    _synthHttpJson(cb, { requestID: transID }); // unknown path, give the skill *something*
+
+  // Hub path inferred from the jetstream HTTP path: /listen/* -> /listen,
+  // /proactive/* -> /proactive (the hub's socket handlers).
+  const hubPath = options.path.startsWith('/proactive/') ? '/proactive' : '/listen';
+  const proxyUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/__cloud-ws?upstream=${encodeURIComponent(key)}&path=${encodeURIComponent(hubPath)}&transID=${encodeURIComponent(transID)}`;
+  let turnWS;
+  try { turnWS = new window.WebSocket(proxyUrl); }
+  catch (e) {
+    setTimeout(() => (reqHandlers.error || []).forEach((h) => { try { h(e); } catch (_) { /* */ } }), 0);
     return;
   }
-  for (const m of msgs) { try { ws.send(JSON.stringify(m)); } catch (_) { /* socket race */ } }
+  const pending = [];
+  for (const m of msgs) pending.push(JSON.stringify(m));
+  turnWS.onopen = () => { for (const m of pending) { try { turnWS.send(m); } catch (_) {} } };
+  turnWS.onmessage = (ev) => {
+    // Translate hub Hubmsg -> jetstream WSmsg (transID -> requestID) and forward
+    // through the eventSock so jetstream-client's Client.handleMessage picks it up.
+    let data = ev.data;
+    if (typeof data === 'string' && data.charCodeAt(0) === 123) {
+      try {
+        const obj = JSON.parse(data);
+        if (obj && !obj.requestID) {
+          if (obj.transID) obj.requestID = obj.transID;
+          else if (obj.msgID) obj.requestID = obj.msgID;
+        }
+        // Ensure transID matches (hub may stamp its own on error msgs).
+        if (obj && !obj.transID && obj.requestID) obj.transID = obj.requestID;
+        data = JSON.stringify(obj);
+      } catch (_) { /* leave verbatim */ }
+    }
+    if (eventSock) { try { eventSock.emit('message', data); } catch (_) {} }
+  };
+  turnWS.onerror = (e) => { console.warn('[cloud] turn WS error', transID, e && e.message); };
+  turnWS.onclose = () => { /* per-turn WS closed; let skill flow handle it */ };
+
   _synthHttpJson(cb, { requestID: transID });
 }
 
@@ -688,13 +718,25 @@ function makeFakeWs() {
 
   function WebSocket(url) {
     const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
-    if (server && typeof window !== 'undefined' && window.WebSocket && String(url).indexOf(server) >= 0) {
-      // jetstream-client opens ws://host/events + /vad, but Pegasus's hub serves
-      // its WebSocket at /listen and has no /vad. Rewrite /events -> /listen for
-      // the configured server, and silent-fake /vad (no upstream).
-      let u = String(url);
-      if (/\/vad(\?|$)/.test(u)) { /* fall through to in-memory silent socket */ }
-      else { if (/\/events(\?|$)/.test(u)) u = u.replace(/\/events(\?|$)/, '/listen$1'); return realSocket(u); }
+    // The pegasus hub uses per-turn WS connections WITH custom upgrade headers
+    // (X-JIBO-transID). Browsers can't set those, so the per-turn opens go through
+    // the dev server's /__cloud-ws proxy (see bridgeViaHub). The long-lived
+    // /events + /vad sockets jetstream-client opens aren't real connections to
+    // anything on the hub (the hub has no such routes) — make them silent fakes
+    // and register the /events socket so bridgeViaHub can push translated hub
+    // events back into jetstream-client through it.
+    if (server && String(url).indexOf(server) >= 0 && /\/(events|vad)(\?|$)/.test(String(url))) {
+      const sock = new Socket();
+      sock.url = url;
+      sock.readyState = 1;
+      setTimeout(() => sock.emit('open'), 0);
+      try {
+        const h = hostFromUrl(url);
+        if (h && typeof window !== 'undefined' && window.__hubSockets && /\/events/.test(String(url))) {
+          window.__hubSockets[h] = sock;
+        }
+      } catch (_) { /* ignore */ }
+      return sock;
     }
     const client = new Socket();
     client.url = url;

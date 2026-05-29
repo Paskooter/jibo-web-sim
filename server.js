@@ -3,6 +3,7 @@
 
 import express from 'express';
 import http from 'node:http';
+import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -108,6 +109,40 @@ app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
 
 app.use(express.static(__dirname, { extensions: ['html'] }));
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`jibo-web-sim dev server listening on http://${HOST}:${PORT}/`);
+});
+
+// WebSocket proxy to a Pegasus hub. Browsers can't set custom WS-upgrade headers
+// (the hub requires X-JIBO-transID per connection and uses a new socket per
+// turn), so the browser opens
+//   ws://<sim>/__cloud-ws?upstream=<host>:<port>&path=<p>&transID=<id>[&robotID=<r>]
+// and the server upgrades both sides and pipes frames between them, injecting
+// the X-JIBO-transID / X-JIBO-robotID headers on the upstream handshake.
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, sock, head) => {
+  if (!req.url || !req.url.startsWith('/__cloud-ws')) { sock.destroy(); return; }
+  const u = new URL(req.url, 'http://x');
+  const upstream = u.searchParams.get('upstream');
+  const path = u.searchParams.get('path') || '/';
+  const transID = u.searchParams.get('transID') || '';
+  const robotID = u.searchParams.get('robotID') || 'web-sim-robot';
+  if (!upstream || !/^[\w.-]+(:\d+)?$/.test(upstream)) { sock.destroy(); return; }
+  wss.handleUpgrade(req, sock, head, (clientWS) => {
+    const upstreamWS = new WS(`ws://${upstream}${path}`, {
+      headers: { 'X-JIBO-transID': transID, 'X-JIBO-robotID': robotID },
+    });
+    let opened = false;
+    const cleanup = () => { try { clientWS.close(); } catch (_) {} try { upstreamWS.close(); } catch (_) {} };
+    upstreamWS.on('open', () => { opened = true; });
+    // Buffer client frames until upstream is open.
+    const pending = [];
+    clientWS.on('message', (data) => { if (opened) { try { upstreamWS.send(data); } catch (_) {} } else pending.push(data); });
+    upstreamWS.on('open', () => { for (const d of pending) { try { upstreamWS.send(d); } catch (_) {} } pending.length = 0; });
+    upstreamWS.on('message', (data) => { try { clientWS.send(data); } catch (_) {} });
+    upstreamWS.on('close', cleanup);
+    clientWS.on('close', cleanup);
+    upstreamWS.on('error', (e) => { try { clientWS.send(JSON.stringify({ type: 'ERROR', data: { message: 'upstream WS error: ' + e.message } })); } catch (_) {} cleanup(); });
+    clientWS.on('error', cleanup);
+  });
 });
