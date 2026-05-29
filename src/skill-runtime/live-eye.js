@@ -444,37 +444,50 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
-  // AnimDB: jibo's AnimDBPlugin calls `resolveAnimDB(jibo)` which walks
-  // node's Module._resolveFilename from process.cwd() to find
-  // jibo-anim-db-animations. In the browser that resolver has no usable cwd,
-  // so resolveAnimDB returns undefined and the plugin inits an EMPTY AnimDB
-  // (the "Module 'jibo-anim-db-animations' not found" warning at boot).
-  // With an empty AnimDB, every `<anim cat='dance' filter='&(music)'/>` tag
-  // in skill prompts resolves to "no matching animations" and gets dropped
-  // from the timeline — so the dance speak runs only the per-word posture
-  // shifts and Jibo never actually dances.
-  // Re-init with the known browser-relative animdb.json path so the
-  // ~66000-line manifest gets indexed and category/meta queries return.
+  // AnimDB: jibo's AnimDBPlugin (jibo.js:7463) calls `resolveAnimDB(jibo)`
+  // which walks node's Module._resolveFilename from process.cwd() to find
+  // jibo-anim-db-animations. In the browser that resolver has no usable
+  // cwd, so resolveAnimDB returns undefined and the plugin inits an EMPTY
+  // AnimDB (the "Module 'jibo-anim-db-animations' not found" warning at
+  // boot). With an empty AnimDB, every `<anim cat='dance' filter='&(music)'
+  // />` tag in skill prompts resolves to "no matching animations" and gets
+  // dropped from the timeline — only the auto-tagger's per-word posture
+  // shifts (CommaRule / NounRule etc., with bundled named animations) play,
+  // so the dance speak is ~1.5s of background motion and Jibo never
+  // actually dances.
+  //
+  // We can't re-init AFTER the plugin runs (initOfflineServices fires
+  // BEFORE jibo.init drives the plugin chain). Instead, monkey-patch
+  // animdb.api.init to auto-fill the path when the plugin calls it. Once
+  // patched, the plugin's `animdb.api.init(jibo)` becomes
+  // `animdb.api.init(jibo, <skill>/node_modules/jibo-anim-db-animations/animdb.json)`
+  // and readAndAddAnimCollection walks the ~66000-line manifest (via our
+  // cjs-require fs.open/fstat/read shims) and indexes everything by name,
+  // category, and meta. Subsequent embodied-dialog queries
+  // (`{ categories: ['dance'], includeSomeMeta: ['music'] }`) then return
+  // matching animations.
   try {
-    if (jibo.animDB && typeof jibo.animDB.init === 'function') {
+    if (jibo.animDB && typeof jibo.animDB.init === 'function' && !jibo.animDB.__webPatched) {
+      jibo.animDB.__webPatched = true;
       const skillDir = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
-      if (skillDir) {
-        const animDBPath = `${skillDir}/node_modules/jibo-anim-db-animations/animdb.json`;
-        const empty = !jibo.animDB.isInitialized || !jibo.animDB.isInitialized() ||
-                      (jibo.animDB.getAnimationNames && jibo.animDB.getAnimationNames().length === 0);
-        if (empty && !jibo.animDB.__reInited) {
-          jibo.animDB.__reInited = true;
-          const r = jibo.animDB.init(jibo, animDBPath);
-          if (r && typeof r.then === 'function') {
-            r.then(() => {
+      const defaultPath = skillDir ? `${skillDir}/node_modules/jibo-anim-db-animations/animdb.json` : '';
+      const orig = jibo.animDB.init.bind(jibo.animDB);
+      jibo.animDB.init = function patchedInit(jiboArg, animDBPath, ...rest) {
+        const path = animDBPath || defaultPath;
+        console.log('[live-eye] animDB.init(', !!path ? path : '<empty>', ')');
+        const r = orig(jiboArg, path, ...rest);
+        if (r && typeof r.then === 'function') {
+          r.then(() => {
+            try {
               const n = jibo.animDB.getAnimationNames ? jibo.animDB.getAnimationNames().length : -1;
-              console.log('[live-eye] animDB re-init OK, animations indexed:', n);
-            }).catch((e) => console.warn('[live-eye] animDB.init:', e && e.message));
-          }
+              console.log('[live-eye] animDB indexed animations:', n);
+            } catch (_) { /* */ }
+          }, (e) => console.warn('[live-eye] animDB.init failed:', e && e.message));
         }
-      }
+        return r;
+      };
     }
-  } catch (e) { console.warn('[live-eye] animDB init failed:', e.message); }
+  } catch (e) { console.warn('[live-eye] animDB patch failed:', e.message); }
 
   // Expression plugin: subscribes the local face renderer to the expression
   // service's `dofs` events. Without it, jibo.face.eye won't reflect any
