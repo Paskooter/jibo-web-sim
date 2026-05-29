@@ -438,11 +438,32 @@ export function initOfflineServices(jibo, requireFn) {
   // in init({jibo}); the ActionPlugin skips this in UNIT_TESTS, leaving _runtime
   // undefined so goals (e.g. BeSkillSwitchGoal) crash on parent.dateProvider. init
   // is local (goal providers + update loop on jibo.timer), so run it ourselves.
+  // Plug a noop `proactive` on the runtime after init: jibo-action-system reads
+  // pegasusProactiveTrigger from ITS OWN package.json (= false), so
+  // `_runtime.proactive` stays null and any skill calling
+  // `jibo.action.checkEnvironmentContext()` (e.g. @be/surprises in its open
+  // hook) crashes with "Cannot read properties of null (reading
+  // 'checkEnvironmentInhibitors')". A noop returning [] keeps the skill alive.
   try {
     if (jibo && jibo.action && jibo.action.init && !jibo.action.__inited) {
       jibo.action.__inited = true;
       const r = jibo.action.init({ jibo });
-      if (r && typeof r.catch === 'function') r.catch((e) => console.warn('[live-eye] action.init:', e && e.message));
+      const installProactiveStub = () => {
+        try {
+          const rt = jibo.action._runtime;
+          if (rt && !rt.proactive) {
+            rt.proactive = {
+              checkEnvironmentInhibitors: () => [],
+              update: () => {},
+              dispose: () => {},
+              setDisableProactiveTrigger: () => {},
+              init: () => {},
+            };
+          }
+        } catch (_) { /* */ }
+      };
+      if (r && typeof r.then === 'function') r.then(installProactiveStub, (e) => { console.warn('[live-eye] action.init:', e && e.message); installProactiveStub(); });
+      else installProactiveStub();
     }
   } catch (e) { console.warn('[live-eye] action.init:', e.message); }
   // The KB loop is normally set up by the host (the original sim called kb.init +
