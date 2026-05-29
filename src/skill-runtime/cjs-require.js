@@ -539,6 +539,17 @@ function makeBuiltins() {
   Buffer.allocUnsafe = (n) => _wrap(new Uint8Array(n));
   Buffer.isBuffer = (x) => x instanceof Uint8Array;
   Buffer.concat = (arr) => { let len = 0; for (const a of arr) len += a.length; const out = new Uint8Array(len); let o = 0; for (const a of arr) { out.set(a, o); o += a.length; } return _wrap(out); };
+  // jibo-client-framework's sendPostRequest uses Buffer.byteLength(body) for
+  // Content-Length. Without it, every HTTP POST to the Pegasus hub (e.g.
+  // /listen/start_local_turn) throws before sending.
+  Buffer.byteLength = (str, enc) => {
+    if (str == null) return 0;
+    if (typeof str !== 'string') return str.length || str.byteLength || 0;
+    if (!enc || /^utf-?8$/i.test(enc)) {
+      try { return new TextEncoder().encode(str).length; } catch (_) { /* fall through */ }
+    }
+    return str.length;
+  };
 
   const path = {
     sep: '/',
