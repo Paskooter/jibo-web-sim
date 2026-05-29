@@ -167,7 +167,14 @@ async function bootReal() {
           // hub-side parser (API.ai / dialogflow) produces those rules. If we
           // stuff the text into CLIENT_NLU.intent, the hub treats it as a
           // pre-resolved intent name and the router returns match:null.
-          js.startLocalTurn({ nluRules: [], clientASR: text })
+          //
+          // 'launch' is the meta-rule the pegasus parser uses to union all
+          // skill-launch intents (parser/cli/build-rules.ts builds a single
+          // launch.fst out of every */launch.rule under rules_src/). Sending
+          // nluRules:['launch'] makes the parser tag matched intents with
+          // 'launch' in the returned NLU.rules, which is exactly what
+          // IntentRouter.getSkillIDFromNLU and be/be's SharedGlobalEvents check.
+          js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
             .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
             .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
         }
