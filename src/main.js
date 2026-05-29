@@ -197,6 +197,24 @@ async function startSkillRuntime() {
       } catch (_) { reply(); }
     } else if (m.kind === 'speak-stop' && synth) {
       try { synth.cancel(); } catch (_) { /* nothing speaking */ }
+    } else if (m.kind === 'play-sound' && typeof m.src === 'string') {
+      // The iframe's AudioContext stays suspended (sandbox blocks user
+      // activation), so any sound it tries to play through Web Audio is
+      // silent. Play it in the host window, where the Start Jibo click is
+      // the user activation. m.src is already a same-origin HTTP URL.
+      try {
+        const audio = new Audio(m.src);
+        if (typeof m.volume === 'number') audio.volume = Math.max(0, Math.min(1, m.volume));
+        if (m.loop) audio.loop = true;
+        const fin = () => {
+          try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (_) { /* gone */ }
+        };
+        audio.addEventListener('ended', fin, { once: true });
+        audio.addEventListener('error', fin, { once: true });
+        audio.play().catch(() => fin());
+      } catch (_) {
+        try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (__) { /* */ }
+      }
     } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
       // jibo-be animation playback (expression.createAndPlayAnimation) — the
       // skill-runtime samples the animation's channels per frame and posts the

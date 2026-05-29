@@ -444,6 +444,65 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
+  // Audio playback: the sandboxed iframe never gets user activation
+  // (sandbox=allow-scripts,allow-same-origin, no allow-user-activation), so
+  // its AudioContext stays in 'suspended' state and Web Audio buffer playback
+  // is silent. The host window DOES have user activation (Start Jibo gate).
+  // Route every Sound.play() through the host: postMessage 'play-sound' with
+  // the file URL, host plays via HTMLAudioElement, posts 'sound-done' back
+  // when it ends. Mirrors the existing TTS routing.
+  try {
+    if (jibo.sound && jibo.sound.Sound && jibo.sound.Sound.prototype && !jibo.sound.Sound.prototype.__hostRouted) {
+      const Sound = jibo.sound.Sound;
+      Sound.prototype.__hostRouted = true;
+      const origPlay = Sound.prototype.play;
+      let _seq = 0;
+      if (!window.__pendingSounds) window.__pendingSounds = new Map();
+      // One bridge listener picks up sound-done events from the host.
+      if (!window.__soundBridgeInstalled) {
+        window.__soundBridgeInstalled = true;
+        window.addEventListener('message', (ev) => {
+          const m = ev.data;
+          if (!m || m.__jibo !== true) return;
+          if (m.kind === 'sound-done' && window.__pendingSounds.has(m.id)) {
+            const fin = window.__pendingSounds.get(m.id);
+            window.__pendingSounds.delete(m.id);
+            try { fin(); } catch (_) { /* */ }
+          }
+        });
+      }
+      Sound.prototype.play = function play(options) {
+        const callOpts = (typeof options === 'function') ? { complete: options } : (options || {});
+        const src = this.src;
+        // Local Sound class still runs (decoded buffer + chain), but the iframe's
+        // AudioContext is suspended so nothing is audible. The HOST plays the
+        // file from the same HTTP origin, and we signal complete when it ends.
+        try {
+          if (typeof src === 'string' && src && typeof window !== 'undefined' && window.parent) {
+            const id = ++_seq;
+            // Map a bundle path (/external-skills/...) — already HTTP-relative —
+            // straight through to the host. If src is absolute file path inside
+            // node_modules, rewrite onto our HTTP origin.
+            let url = src;
+            const i = src.lastIndexOf('/node_modules/');
+            if (i >= 0) url = location.origin + src.slice(i);
+            else if (src.indexOf('/external-skills/') >= 0) url = location.origin + src.slice(src.indexOf('/external-skills/'));
+            else if (src[0] === '/') url = location.origin + src;
+            const fin = () => {
+              if (callOpts.complete) { try { callOpts.complete(this); } catch (_) { /* */ } }
+            };
+            window.__pendingSounds.set(id, fin);
+            window.parent.postMessage({ __jibo: true, kind: 'play-sound', id, src: url, loop: !!this.loop, volume: this.volume }, '*');
+          }
+        } catch (e) { console.warn('[live-eye] sound bridge:', e && e.message); }
+        // Still run the original local play (sets isPlaying, event timers, etc.)
+        // even though it's audibly silent — local consumers may check state.
+        return origPlay.call(this, options);
+      };
+      console.log('[live-eye] Sound.play routed to host window');
+    }
+  } catch (e) { console.warn('[live-eye] sound routing failed:', e.message); }
+
   // AnimDB: jibo's AnimDBPlugin (jibo.js:7463) calls `resolveAnimDB(jibo)`
   // which walks node's Module._resolveFilename from process.cwd() to find
   // jibo-anim-db-animations. In the browser that resolver has no usable
