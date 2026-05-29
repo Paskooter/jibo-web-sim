@@ -3,11 +3,12 @@
 
 import express from 'express';
 import http from 'node:http';
+import https from 'node:https';
 import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 // Pegasus hub auth: it accepts a Bearer JWT signed with HS256 using
 // process.env.ETCO_server_webTokenSecret. The default dev/local secret +
@@ -82,10 +83,9 @@ app.get(/\/@be\/nimbus\/animations\/textures\/([^/?#]+)$/, (req, res, next) => {
   const file = req.path.split('/').pop();
   const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${file}`;
   // Probe disk to avoid an infinite loop if the fallback is also missing.
-  const fs = require('node:fs');
   try {
     const abs = normalize(join(EXTERNAL_SKILLS, fallback.slice('/external-skills/'.length)));
-    if (fs.existsSync(abs)) return res.redirect(302, fallback);
+    if (existsSync(abs)) return res.redirect(302, fallback);
   } catch (_) { /* fall through */ }
   next();
 });
@@ -129,32 +129,26 @@ app.get('/__list', (req, res) => {
 app.get('/__img', (req, res) => {
   const target = String(req.query.url || '');
   if (!/^https?:\/\//i.test(target)) { res.status(400).type('text/plain').send('bad url'); return; }
-  const lib = target.startsWith('https') ? require('node:https') : require('node:http');
-  lib.get(target, { headers: { 'User-Agent': 'jibo-web-sim' } }, (upstream) => {
-    // Follow one redirect.
-    if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
-      const loc = upstream.headers.location;
-      const next = /^https?:\/\//i.test(loc) ? loc : new URL(loc, target).toString();
-      const lib2 = next.startsWith('https') ? require('node:https') : require('node:http');
-      lib2.get(next, { headers: { 'User-Agent': 'jibo-web-sim' } }, (u2) => {
-        res.status(u2.statusCode || 502);
-        for (const [k, v] of Object.entries(u2.headers)) {
-          if (/^(transfer-encoding|connection|content-security-policy|access-control-allow-origin)$/i.test(k)) continue;
-          res.setHeader(k, v);
-        }
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        u2.pipe(res);
-      }).on('error', (e) => res.status(502).type('text/plain').send(e.message));
-      return;
-    }
-    res.status(upstream.statusCode || 502);
-    for (const [k, v] of Object.entries(upstream.headers)) {
-      if (/^(transfer-encoding|connection|content-security-policy|access-control-allow-origin)$/i.test(k)) continue;
-      res.setHeader(k, v);
-    }
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    upstream.pipe(res);
-  }).on('error', (e) => res.status(502).type('text/plain').send(e.message));
+  const libFor = (u) => (u.startsWith('https') ? https : http);
+  const proxyOne = (url, allowRedirect) => {
+    libFor(url).get(url, { headers: { 'User-Agent': 'jibo-web-sim' } }, (upstream) => {
+      if (allowRedirect && upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
+        const loc = upstream.headers.location;
+        const next = /^https?:\/\//i.test(loc) ? loc : new URL(loc, url).toString();
+        upstream.resume();           // discard the redirect body
+        proxyOne(next, false);
+        return;
+      }
+      res.status(upstream.statusCode || 502);
+      for (const [k, v] of Object.entries(upstream.headers)) {
+        if (/^(transfer-encoding|connection|content-security-policy|access-control-allow-origin)$/i.test(k)) continue;
+        res.setHeader(k, v);
+      }
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      upstream.pipe(res);
+    }).on('error', (e) => res.status(502).type('text/plain').send(e.message));
+  };
+  proxyOne(target, true);
 });
 
 // Same-origin proxy to a Pegasus cloud backend, to dodge CORS. The iframe sends
