@@ -456,9 +456,22 @@ function _buildHubMessages(path, body, transID) {
         maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
       };
     }
+    // CONTEXT.runtime needs to be structurally complete: the user's deployed
+    // pegasus reads `runtime.loop` etc. without null-checks (open-source
+    // ListenTransactionHandler is safe, but the deployed hub crashed with
+    // "Cannot read property 'loop' of null" on null runtime). Use the
+    // same defaults `pegasus/test-utils/mockRuntimeData` produces — empty
+    // loop/users/peoplePresent, neutral character, etc.
+    const _runtime = {
+      loop: { loopId: '', jibo: { id: '', birthdate: 0, color: 'WHITE' }, owner: '', users: [] },
+      location: { lng: 0, lat: 0, country: '', countryCode: '', stateAbbr: '', state: '', city: '', iso: new Date().toISOString() },
+      perception: { peoplePresent: [], speaker: null },
+      character: { motivation: { playful: 0, social: 0 }, emotion: { confidence: 0, valence: 0, name: 'NEUTRAL' } },
+      dialog: { referent: null },
+    };
     const msgs = [
       { type: 'LISTEN', msgID: mid(), ts, data },
-      { type: 'CONTEXT', msgID: mid(), ts, data: { general: null, runtime: null, skill: null } },
+      { type: 'CONTEXT', msgID: mid(), ts, data: { general: null, runtime: _runtime, skill: null } },
     ];
     if (body.clientNLU != null) {
       // NLUResult shape per @jibo/interfaces nlu.ts: { rules, intent, entities }.
