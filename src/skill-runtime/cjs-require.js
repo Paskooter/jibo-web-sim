@@ -425,42 +425,51 @@ function _buildHubMessages(path, body, transID) {
   const ts = Date.now();
   const mid = () => 'mid:' + _hubUuid();
   if (path === '/listen/start_local_turn') {
-    // Per jiboV2/jetstream LhubClient.cc the actual hub sequence for typed input
-    // is LISTEN -> CONTEXT -> CLIENT_NLU (or CLIENT_ASR). The hub's state machine
-    // (pegasus packages/hub ListenTransactionHandler.ts) reaches NLU only after
-    // CLIENT_NLU lands while in WAIT_CLIENT_NLU. LISTEN.mode picks which
-    // pre-resolved-input the hub waits for: CLIENT_NLU, CLIENT_ASR, or ASR.
-    const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : 'ASR');
-    const msgs = [{
-      type: 'LISTEN', msgID: mid(), transID, ts,
-      data: {
-        lang: body.language || 'en-us',
-        hotphrase: !!body.hotphrase,
-        rules: body.nluRules || [],
-        mode,
-        asr: {
-          hints: body.hintPhrases || [],
-          earlyEOS: body.earlyEOS || [],
-          encoding: 'opus',
-          sampleRate: 16000,
-          sosTimeout: body.sosTimeout > 0 ? Math.round(body.sosTimeout * 1000) : -1,
-          maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
-        },
-      },
-    }];
-    // Minimal CONTEXT — the hub's MessagePreProcessor auto-fills `general` from
-    // socket.auth when absent; we provide an empty skill/runtime block.
-    msgs.push({
-      type: 'CONTEXT', msgID: mid(), transID, ts,
-      data: { general: { lang: 'en' }, runtime: {}, skill: {} },
-    });
+    // Aligned with pasketti/pegasus/packages/hub-client/src/session/ListenClientSession.ts:
+    // the JS hub-client of the pegasus era sends ONLY LISTEN (and audio frames /
+    // separate CLIENT_NLU / CLIENT_ASR), NOT CONTEXT. Hub auto-fills general from
+    // socket.auth (MessagePreProcessor.preProcessContextMessage). The
+    // BaseMessage shape is { type, msgID, ts, data } — transID is a SOCKET
+    // header, not a message field, so we don't include it inside the body.
+    // ListenMessageMode enum is only CLIENT_ASR | CLIENT_NLU (audio path is no
+    // mode at all); for typed chat use CLIENT_NLU.
+    const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : undefined);
+    // LanguageData.lang is `en-US` | `en-CA` — mixed case. jetstream-client
+    // may pass `en-us`; normalize.
+    const lang = String(body.language || 'en-US').toLowerCase() === 'en-ca' ? 'en-CA' : 'en-US';
+    const data = {
+      lang,
+      hotphrase: !!body.hotphrase,
+      rules: Array.isArray(body.nluRules) ? body.nluRules.map((r) => String(r).toLowerCase()) : [],
+    };
+    if (mode) data.mode = mode;
+    // ASRConfig isn't needed for CLIENT_NLU (no audio), but include the
+    // (optional) fields the C++ jetstream populates if present.
+    if (!mode || mode === 'CLIENT_ASR') {
+      data.asr = {
+        hints: body.hintPhrases || [],
+        earlyEOS: body.earlyEOS || [],
+        encoding: 'opus',
+        sampleRate: 16000,
+        sosTimeout: body.sosTimeout > 0 ? Math.round(body.sosTimeout * 1000) : -1,
+        maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
+      };
+    }
+    const msgs = [{ type: 'LISTEN', msgID: mid(), ts, data }];
     if (body.clientNLU != null) {
-      const nluData = typeof body.clientNLU === 'string'
+      // NLUResult shape per @jibo/interfaces nlu.ts: { rules, intent, entities }.
+      // jetstream-client may send `rules: null` — normalize to [].
+      const raw = typeof body.clientNLU === 'string'
         ? (() => { try { return JSON.parse(body.clientNLU); } catch (_) { return { intent: body.clientNLU }; } })()
         : body.clientNLU;
-      msgs.push({ type: 'CLIENT_NLU', msgID: mid(), transID, ts, data: nluData });
+      const nluData = {
+        rules: Array.isArray(raw.rules) ? raw.rules : [],
+        intent: raw.intent || '',
+        entities: raw.entities || {},
+      };
+      msgs.push({ type: 'CLIENT_NLU', msgID: mid(), ts, data: nluData });
     } else if (body.clientASR) {
-      msgs.push({ type: 'CLIENT_ASR', msgID: mid(), transID, ts, data: { text: String(body.clientASR) } });
+      msgs.push({ type: 'CLIENT_ASR', msgID: mid(), ts, data: { text: String(body.clientASR) } });
     }
     return msgs;
   }
