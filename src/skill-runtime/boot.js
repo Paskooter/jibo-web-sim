@@ -147,7 +147,10 @@ async function bootReal() {
     //    requires the cloud (Pegasus); HTTP goes via BusXHR's native pass-through.
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
       const text = m.text.trim();
-      const utt = { intent: text, entities: {}, rules: null };
+      // In-MIM hook: ActionData.UTTERANCE drives the same emitter — the active
+      // MIM's handleSpeech listener can match on raw text/intent for dialog
+      // prompts. We keep an utterance-shaped object for that path.
+      const utt = { intent: text, entities: {}, rules: [] };
       let inMim = false;
       try {
         const mim = window.jibo && window.jibo.mim;
@@ -159,7 +162,12 @@ async function bootReal() {
       try {
         const js = window.jibo && window.jibo.jetstream;
         if (js && typeof js.startLocalTurn === 'function') {
-          js.startLocalTurn({ nluRules: [], clientNLU: utt })
+          // Use CLIENT_ASR (raw text), NOT CLIENT_NLU. The hub's IntentRouter
+          // only matches when nluData.rules contains 'launch', and only the
+          // hub-side parser (API.ai / dialogflow) produces those rules. If we
+          // stuff the text into CLIENT_NLU.intent, the hub treats it as a
+          // pre-resolved intent name and the router returns match:null.
+          js.startLocalTurn({ nluRules: [], clientASR: text })
             .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
             .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
         }
