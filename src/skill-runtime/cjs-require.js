@@ -520,50 +520,76 @@ function _synthHttpJson(cb, obj) {
 // in ListenHandler.ts). Inbound hub events are translated and forwarded onto
 // jetstream-client's long-lived eventWS fake (registered in __hubSockets), so
 // the skill receives them as if they came through one stream.
+// Translate one inbound hub Hubmsg into jetstream WSmsg event(s), mirroring
+// jiboV2/jetstream ListenLoop.cc's per-hub-message handlers (phw_jm_hub_*).
+// Hub vocabulary (LISTEN, NLU, ASR, SOS_TIMEOUT, ...) maps to robot-side
+// jetstream events (TURN_RESULT, SOS, EOS, HJ_*, SKILL_*, PROACTIVE).
+function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
+  const base = { ts: hubMsg.ts || Date.now(), transID, requestID };
+  switch (hubMsg.type) {
+    case 'SOS':                 return [{ ...base, type: 'SOS' }];
+    case 'EOS':                 return [{ ...base, type: 'EOS' }];
+    case 'SOS_TIMEOUT':         return isGlobal
+      ? [{ ...base, type: 'HJ_ONLY' }]
+      : [{ ...base, type: 'TURN_RESULT', data: { status: 'TIMEDOUT', message: 'sos', global: isGlobal } }];
+    case 'MAX_SPEECH_TIMEOUT':  return [{ ...base, type: 'TURN_RESULT', data: { status: 'TIMEDOUT', message: 'maxSpeech', global: isGlobal } }];
+    case 'LISTEN':              // hub-side LISTEN response = final turn result (asr+nlu+match)
+      return [{ ...base, type: 'TURN_RESULT', data: { status: 'SUCCEEDED', result: hubMsg.data, global: isGlobal } }];
+    case 'ERROR':               return [
+      { ...base, type: 'ERROR', data: hubMsg.data },
+      { ...base, type: 'TURN_RESULT', data: { status: 'FAILED', message: (hubMsg.data && hubMsg.data.message) || 'hub error', global: isGlobal } },
+    ];
+    case 'SKILL_REDIRECT':
+    case 'SKILL_ACTION':
+    case 'PROACTIVE':
+    case 'COMMAND':
+      return [{ ...base, type: hubMsg.type, data: hubMsg.data }];
+    // Intermediate hub state — the C++ jetstream service consumes these without
+    // emitting an event of its own (the final LISTEN response is what matters).
+    case 'ASR':
+    case 'NLU':                 return [];
+    default:                    return [{ ...base, type: hubMsg.type, data: hubMsg.data }];
+  }
+}
+
 function bridgeViaHub(options, body, cb, reqHandlers, host) {
   const key = host + (options.port ? ':' + options.port : '');
   const reg = (typeof window !== 'undefined' && window.__hubSockets) || {};
   const eventSock = reg[key] || reg[host];
   let bodyObj = {};
   try { bodyObj = JSON.parse(body.join('') || '{}'); } catch (_) { /* leave empty */ }
-  const transID = options.path === '/listen/mimic_global_turn' ? 'GLOBAL' : 'tid:' + _hubUuid();
+  const isGlobal = options.path === '/listen/mimic_global_turn';
+  const transID = isGlobal ? 'GLOBAL' : 'tid:' + _hubUuid();
+  const requestID = transID; // jiboV2/jetstream: request_id is reused as transaction_id
   const msgs = _buildHubMessages(options.path, bodyObj, transID);
 
-  // Hub path inferred from the jetstream HTTP path: /listen/* -> /listen,
-  // /proactive/* -> /proactive (the hub's socket handlers).
   const hubPath = options.path.startsWith('/proactive/') ? '/proactive' : '/listen';
   const proxyUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/__cloud-ws?upstream=${encodeURIComponent(key)}&path=${encodeURIComponent(hubPath)}&transID=${encodeURIComponent(transID)}`;
   let turnWS;
   try { turnWS = new window.WebSocket(proxyUrl); }
-  catch (e) {
-    setTimeout(() => (reqHandlers.error || []).forEach((h) => { try { h(e); } catch (_) { /* */ } }), 0);
-    return;
-  }
-  const pending = [];
-  for (const m of msgs) pending.push(JSON.stringify(m));
-  turnWS.onopen = () => { for (const m of pending) { try { turnWS.send(m); } catch (_) {} } };
+  catch (e) { setTimeout(() => (reqHandlers.error || []).forEach((h) => { try { h(e); } catch (_) { /* */ } }), 0); return; }
+
+  const emitToSkill = (obj) => { if (!eventSock) return; try { eventSock.emit('message', JSON.stringify(obj)); } catch (_) { /* */ } };
+  const pending = msgs.map((m) => JSON.stringify(m));
+  turnWS.onopen = () => {
+    for (const m of pending) { try { turnWS.send(m); } catch (_) { /* */ } }
+    // Mirror ListenLoop.cc:321 — emit TURN_STARTED to the skill once the hub
+    // connection is up and the turn has been kicked off.
+    if (!isGlobal) emitToSkill({ ts: Date.now(), type: 'TURN_STARTED', transID, requestID });
+  };
   turnWS.onmessage = (ev) => {
-    // Translate hub Hubmsg -> jetstream WSmsg (transID -> requestID) and forward
-    // through the eventSock so jetstream-client's Client.handleMessage picks it up.
-    let data = ev.data;
-    if (typeof data === 'string' && data.charCodeAt(0) === 123) {
-      try {
-        const obj = JSON.parse(data);
-        if (obj && !obj.requestID) {
-          if (obj.transID) obj.requestID = obj.transID;
-          else if (obj.msgID) obj.requestID = obj.msgID;
-        }
-        // Ensure transID matches (hub may stamp its own on error msgs).
-        if (obj && !obj.transID && obj.requestID) obj.transID = obj.requestID;
-        data = JSON.stringify(obj);
-      } catch (_) { /* leave verbatim */ }
-    }
-    if (eventSock) { try { eventSock.emit('message', data); } catch (_) {} }
+    let raw = ev.data;
+    if (typeof raw !== 'string') { return; } // upstream should be text frames now
+    try {
+      const hubMsg = JSON.parse(raw);
+      const events = _translateHubMsg(hubMsg, transID, requestID, isGlobal);
+      for (const e of events) emitToSkill(e);
+    } catch (_) { /* not JSON — drop */ }
   };
   turnWS.onerror = (e) => { console.warn('[cloud] turn WS error', transID, e && e.message); };
-  turnWS.onclose = () => { /* per-turn WS closed; let skill flow handle it */ };
+  turnWS.onclose = () => { /* per-turn WS closed; ListenLoop already emitted TURN_RESULT */ };
 
-  _synthHttpJson(cb, { requestID: transID });
+  _synthHttpJson(cb, { requestID });
 }
 
 // Node-style http.request implemented on top of browser `fetch`, so jibo's
