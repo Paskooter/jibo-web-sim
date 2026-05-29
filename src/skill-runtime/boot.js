@@ -139,15 +139,32 @@ async function bootReal() {
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     if (!m || m.__jibo !== true) return;
-    // Typed chat input from the host -> spoofed user utterance into the MIM
-    // (MimManager.handleSpeech is the same hook ActionData.UTTERANCE uses).
+    // Typed chat input from the host. Two paths, mirroring the original sim:
+    //  - In-MIM: MimManager.handleSpeech.emit(...) (same hook ActionData.UTTERANCE
+    //    uses). Only the active MIM listens; outside any MIM it's a no-op.
+    //  - Out-of-MIM / global: jetstream.startLocalTurn({clientNLU:{...}}) — what
+    //    jibo.js does itself when a spoofed utterance arrives mid-speak. This
+    //    requires the cloud (Pegasus); HTTP goes via BusXHR's native pass-through.
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
+      const text = m.text.trim();
+      const utt = { intent: text, entities: {}, rules: null };
+      let inMim = false;
       try {
         const mim = window.jibo && window.jibo.mim;
         if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function') {
-          mim.handleSpeech.emit({ intent: m.text.trim(), entities: {}, rules: null });
+          mim.handleSpeech.emit(utt);
+          inMim = true;
         }
-      } catch (e) { console.warn('[boot] utterance forward:', e.message); }
+      } catch (e) { console.warn('[boot] handleSpeech forward:', e.message); }
+      try {
+        const js = window.jibo && window.jibo.jetstream;
+        if (js && typeof js.startLocalTurn === 'function') {
+          js.startLocalTurn({ nluRules: [], clientNLU: utt })
+            .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
+            .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
+        }
+        console.log('[utterance]', JSON.stringify(text), 'in-mim=', inMim);
+      } catch (e) { console.warn('[boot] startLocalTurn forward:', e.message); }
       return;
     }
     if (m.kind !== 'event' || m.ns !== 'face') return;
