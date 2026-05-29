@@ -425,17 +425,20 @@ function _buildHubMessages(path, body, transID) {
   const ts = Date.now();
   const mid = () => 'mid:' + _hubUuid();
   if (path === '/listen/start_local_turn') {
-    // Aligned with pasketti/pegasus/packages/hub-client/src/session/ListenClientSession.ts:
-    // the JS hub-client of the pegasus era sends ONLY LISTEN (and audio frames /
-    // separate CLIENT_NLU / CLIENT_ASR), NOT CONTEXT. Hub auto-fills general from
-    // socket.auth (MessagePreProcessor.preProcessContextMessage). The
-    // BaseMessage shape is { type, msgID, ts, data } — transID is a SOCKET
-    // header, not a message field, so we don't include it inside the body.
-    // ListenMessageMode enum is only CLIENT_ASR | CLIENT_NLU (audio path is no
-    // mode at all); for typed chat use CLIENT_NLU.
+    // pegasus packages/hub/src/listen/ListenTransactionHandler.ts:42 sets
+    // TIMEOUT_CONTEXT = 5000ms; if no CONTEXT message arrives within 5s
+    // after LISTEN, the hub fires ERROR { code: TIMEOUT_CONTEXT }. The
+    // C++ jetstream-service and the pegasus hub-client-cli both send a
+    // CONTEXT — collapse that into our LISTEN bundle:
+    //   LISTEN  +  CONTEXT(general:null)  +  CLIENT_NLU
+    // CONTEXT with `general: null` triggers MessagePreProcessor to
+    // auto-fill {accountID: socket.auth.id, robotID: socket.auth.friendlyId}
+    // (we sign a Bearer JWT in server.js using the hub-client-cli default
+    // creds, so socket.auth is populated correctly).
+    // BaseMessage shape is { type, msgID, ts, data }; transID is the SOCKET
+    // header, not a per-message field. ListenMessageMode is only
+    // CLIENT_ASR | CLIENT_NLU (audio path = no mode).
     const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : undefined);
-    // LanguageData.lang is `en-US` | `en-CA` — mixed case. jetstream-client
-    // may pass `en-us`; normalize.
     const lang = String(body.language || 'en-US').toLowerCase() === 'en-ca' ? 'en-CA' : 'en-US';
     const data = {
       lang,
@@ -443,8 +446,6 @@ function _buildHubMessages(path, body, transID) {
       rules: Array.isArray(body.nluRules) ? body.nluRules.map((r) => String(r).toLowerCase()) : [],
     };
     if (mode) data.mode = mode;
-    // ASRConfig isn't needed for CLIENT_NLU (no audio), but include the
-    // (optional) fields the C++ jetstream populates if present.
     if (!mode || mode === 'CLIENT_ASR') {
       data.asr = {
         hints: body.hintPhrases || [],
@@ -455,7 +456,10 @@ function _buildHubMessages(path, body, transID) {
         maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
       };
     }
-    const msgs = [{ type: 'LISTEN', msgID: mid(), ts, data }];
+    const msgs = [
+      { type: 'LISTEN', msgID: mid(), ts, data },
+      { type: 'CONTEXT', msgID: mid(), ts, data: { general: null, runtime: null, skill: null } },
+    ];
     if (body.clientNLU != null) {
       // NLUResult shape per @jibo/interfaces nlu.ts: { rules, intent, entities }.
       // jetstream-client may send `rules: null` — normalize to [].

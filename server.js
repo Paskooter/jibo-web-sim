@@ -3,10 +3,34 @@
 
 import express from 'express';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
+
+// Pegasus hub auth: it accepts a Bearer JWT signed with HS256 using
+// process.env.ETCO_server_webTokenSecret. The default dev/local secret +
+// credentials are public defaults baked into hub-client-cli
+// (packages/hub-client-cli/utils/authentication.ts + resources/credentials.json).
+// Override via env if the user's deployment changes them.
+const HUB_SECRET = process.env.HUB_AUTH_SECRET || 'uHGhXhdXzBybGX7YHuEwAFZC';
+const HUB_CREDENTIALS = {
+  id: process.env.HUB_AUTH_ID || 'hub-client-account-id',
+  accessKeyId: process.env.HUB_AUTH_ACCESS_KEY_ID || 'hub-client-access-key-id',
+  secretAccessKey: process.env.HUB_AUTH_SECRET_ACCESS_KEY || 'hub-client-secret-access-key',
+  friendlyId: process.env.HUB_AUTH_FRIENDLY_ID || 'hub-client-friendly-id',
+};
+const HUB_BEARER = (() => {
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const head = b64({ alg: 'HS256', typ: 'JWT' });
+  const body = b64(HUB_CREDENTIALS);
+  const sig = crypto.createHmac('sha256', HUB_SECRET).update(`${head}.${body}`).digest('base64url');
+  return `${head}.${body}.${sig}`;
+})();
+// Expose the friendlyId so the iframe/bridge can stamp CONTEXT.general explicitly
+// if it ever wants to skip the hub's auto-fill path.
+const HUB_AUTH_PUBLIC = { id: HUB_CREDENTIALS.id, friendlyId: HUB_CREDENTIALS.friendlyId };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -92,6 +116,7 @@ app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
     fwdHeaders[k] = v;
   }
   fwdHeaders.host = upstream;
+  if (!fwdHeaders.authorization) fwdHeaders.authorization = `Bearer ${HUB_BEARER}`;
   const upreq = http.request({
     host: uhost, port: uport, path: req.url || '/', method: req.method, headers: fwdHeaders,
   }, (upres) => {
@@ -130,7 +155,11 @@ server.on('upgrade', (req, sock, head) => {
   if (!upstream || !/^[\w.-]+(:\d+)?$/.test(upstream)) { sock.destroy(); return; }
   wss.handleUpgrade(req, sock, head, (clientWS) => {
     const upstreamWS = new WS(`ws://${upstream}${path}`, {
-      headers: { 'X-JIBO-transID': transID, 'X-JIBO-robotID': robotID },
+      headers: {
+        Authorization: `Bearer ${HUB_BEARER}`,
+        'X-JIBO-transID': transID,
+        'X-JIBO-robotID': robotID,
+      },
     });
     let opened = false;
     const cleanup = () => { try { clientWS.close(); } catch (_) {} try { upstreamWS.close(); } catch (_) {} };
