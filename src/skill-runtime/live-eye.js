@@ -150,17 +150,35 @@ function makeEmitter(Event, name) {
 // animation path throws. Give `.events` REAL emitters; everything else stays
 // tolerant. On a play, fire `started` then `stopped` (next tick) so the playback's
 // completion promise resolves and the skill proceeds instead of awaiting forever.
-// Playback length (ms) of a .keys animation from its computed data
-// (`duration` frames / `framerate` fps). The skill paces its flow off the
-// animation completing, so this must be the REAL length: too short and a splash
-// screen flashes and vanishes before it's seen (Word of the Day "did nothing");
-// too long and the skill stalls. Falls back to a sane default if unknown.
+// Playback length (ms) of a .keys animation from its computed data.
+// jibo-keyframes.computeAnimObject output is:
+//   { header:{...}, content:{ name, channels:[{dofName, length, times, values}], events } }
+// — each channel's `length` is the animation duration in seconds, and the
+// last entry of `times[]` is the final keyframe time. Use the max over all
+// channels for a sane upper bound; fall back to `data.duration / framerate`
+// if some pipeline ships the raw shape; finally 1500ms if everything's
+// missing (so a skill never stalls forever).
 function animDurationMs(options) {
   try {
     const d = options && options.data;
-    if (d && typeof d.duration === 'number' && d.duration > 0) {
+    if (!d) return 1500;
+    // Standard computeAnimObject output: pull from channels.
+    const channels = (d.content && Array.isArray(d.content.channels)) ? d.content.channels : null;
+    if (channels && channels.length) {
+      let maxSec = 0;
+      for (const ch of channels) {
+        if (typeof ch.length === 'number' && ch.length > maxSec) maxSec = ch.length;
+        else if (Array.isArray(ch.times) && ch.times.length) {
+          const last = ch.times[ch.times.length - 1];
+          if (typeof last === 'number' && last > maxSec) maxSec = last;
+        }
+      }
+      if (maxSec > 0) return Math.min(60000, Math.max(150, maxSec * 1000));
+    }
+    // Fallback: raw .keys-style { duration, framerate } (in case some path skips computeAnimObject).
+    if (typeof d.duration === 'number' && d.duration > 0) {
       const fps = (typeof d.framerate === 'number' && d.framerate > 0) ? d.framerate : 30;
-      return Math.min(20000, Math.max(150, (d.duration / fps) * 1000));
+      return Math.min(60000, Math.max(150, (d.duration / fps) * 1000));
     }
   } catch (_) { /* fall through */ }
   return 1500;
@@ -241,10 +259,15 @@ function makeAnimInstance(requireFn, play, options) {
     try { events.stopped.emit(); } catch (_) { /* no listener */ }
   };
   if (play) {
+    const dataObj = options && options.data;
+    const channels = (dataObj && dataObj.content && Array.isArray(dataObj.content.channels)) ? dataObj.content.channels : null;
+    const channelCount = channels ? channels.length : 0;
+    const channelDofs = channels ? channels.slice(0, 6).map((c) => c.dofName || c.dof).join(',') : '';
     Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
     // The eye renders the .keys locally over its duration; signal completion when
     // that elapses so the playback promise resolves and the skill advances.
     const dur = animDurationMs(options);
+    console.log('[live-eye] anim play: src=', (options && options.src) || '<inline>', 'dur=', dur, 'ms ch=', channelCount, channelCount ? '(' + channelDofs + (channels.length > 6 ? ',...' : '') + ')' : '');
     setTimeout(emitStopped, dur);
     // Sample the animation's channels per frame and drive both the host body rig
     // (postMessage 'dofs' for body sections + LED ring) and the local eye (push
