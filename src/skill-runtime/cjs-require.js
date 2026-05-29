@@ -398,27 +398,63 @@ function makeUrl() {
 // http/https that fail fast: any request emits 'error' on the next tick so
 // callbacks fire (callers treat the service as unavailable and continue) instead
 // of hanging forever waiting on a response that never comes.
+// Node-style http.request implemented on top of browser `fetch`, so jibo's
+// service clients (e.g. jetstream-client.sendPostRequest -> Pegasus hub) actually
+// reach the network. Replaces the earlier fail-fast shim, which silently dropped
+// every cloud POST. Also translates JSON responses' `msgID` -> `requestID` so
+// jetstream-client (which checks getRequestID) accepts what the Pegasus hub
+// returns. Note: cross-origin POSTs (the iframe -> pegasus.jibo) require CORS
+// on the server — that's the next likely failure mode if this still doesn't go.
 function makeHttpClient() {
-  function makeReq() {
-    const handlers = {};
-    let fired = false;
-    const fail = () => {
-      if (fired) return; fired = true;
-      setTimeout(() => { (handlers.error || []).forEach((h) => h(new Error('no local server (web sim)'))); }, 0);
-    };
+  function request(options, cb) {
+    const reqHandlers = {};
+    const body = [];
+    const url = `http${options.protocol === 'https:' ? 's' : ''}://${options.host || options.hostname || ''}${options.port ? ':' + options.port : ''}${options.path || '/'}`;
+    const method = (options.method || 'GET').toUpperCase();
+    let sent = false;
+    function go() {
+      if (sent) return; sent = true;
+      const init = { method, headers: options.headers || {} };
+      if (method !== 'GET' && method !== 'HEAD' && body.length) init.body = body.join('');
+      fetch(url, init).then(async (res) => {
+        let text = await res.text();
+        // Translate Pegasus hub's `msgID` to jetstream-client's expected `requestID`.
+        if (text && text.charCodeAt(0) === 123 /* { */) {
+          try {
+            const obj = JSON.parse(text);
+            if (obj && obj.msgID && !obj.requestID) { obj.requestID = obj.msgID; text = JSON.stringify(obj); }
+          } catch (_) { /* not JSON, leave as-is */ }
+        }
+        const respHandlers = {};
+        const resp = {
+          statusCode: res.status,
+          headers: Object.fromEntries(res.headers.entries()),
+          setEncoding() {},
+          on(ev, h) { (respHandlers[ev] = respHandlers[ev] || []).push(h); if (ev === 'end' && respHandlers.data) setTimeout(flush, 0); return resp; },
+          once(ev, h) { return resp.on(ev, h); },
+        };
+        if (cb) cb(resp);
+        let flushed = false;
+        function flush() {
+          if (flushed) return; flushed = true;
+          (respHandlers.data || []).forEach((h) => { try { h(text); } catch (_) {} });
+          (respHandlers.end || []).forEach((h) => { try { h(); } catch (_) {} });
+        }
+        setTimeout(flush, 0);
+      }).catch((err) => {
+        (reqHandlers.error || []).forEach((h) => { try { h(err); } catch (_) {} });
+      });
+    }
     const req = {
-      on(ev, cb) { (handlers[ev] = handlers[ev] || []).push(cb); if (ev === 'error') fail(); return req; },
-      once(ev, cb) { return req.on(ev, cb); },
-      write() { return req; },
-      end() { fail(); return req; },
-      abort() {}, destroy() {}, setTimeout() { return req; }, setHeader() {}, flushHeaders() {},
+      on(ev, h) { (reqHandlers[ev] = reqHandlers[ev] || []).push(h); return req; },
+      once(ev, h) { return req.on(ev, h); },
+      write(data) { if (data != null) body.push(typeof data === 'string' ? data : String(data)); return req; },
+      end(data) { if (data != null) body.push(typeof data === 'string' ? data : String(data)); go(); return req; },
+      abort() {}, destroy() {}, setTimeout() { return req; }, setHeader(k, v) { (options.headers = options.headers || {})[k] = v; }, flushHeaders() {},
     };
     return req;
   }
-  return {
-    request: () => makeReq(),
-    get: () => { const r = makeReq(); r.end(); return r; },
-  };
+  return { request, get(options, cb) { const r = request(typeof options === 'string' ? { method: 'GET', path: options } : options, cb); r.end(); return r; } };
 }
 
 // In-memory replacement for the `ws` package. Clients connect silently (emit
@@ -447,7 +483,22 @@ function makeFakeWs() {
     let real;
     try { real = new window.WebSocket(url); } catch (e) { setTimeout(() => sock.emit('error', e), 0); return sock; }
     real.onopen = () => { sock.readyState = 1; sock.emit('open'); };
-    real.onmessage = (ev) => sock.emit('message', ev.data);
+    // Pegasus hub responses use `msgID`; jetstream-client expects `requestID` and
+    // rejects every event missing it (then times out at 60s). Translate inbound
+    // events: alias msgID -> requestID (and final -> eos / data.eos) so the rest
+    // of the protocol can decode them.
+    real.onmessage = (ev) => {
+      let data = ev.data;
+      if (typeof data === 'string' && data.charCodeAt(0) === 123 /* { */) {
+        try {
+          const obj = JSON.parse(data);
+          if (obj && obj.msgID && !obj.requestID) obj.requestID = obj.msgID;
+          if (obj && obj.final === true && obj.data && obj.data.eos === undefined) obj.data.eos = true;
+          data = JSON.stringify(obj);
+        } catch (_) { /* not JSON, pass through */ }
+      }
+      sock.emit('message', data);
+    };
     real.onclose = () => { sock.readyState = 3; sock.emit('close'); };
     real.onerror = (e) => sock.emit('error', e);
     sock.send = (data) => { try { real.send(data); } catch (_) { /* not open */ } };
