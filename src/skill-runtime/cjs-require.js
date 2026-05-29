@@ -398,6 +398,132 @@ function makeUrl() {
 // http/https that fail fast: any request emits 'error' on the next tick so
 // callbacks fire (callers treat the service as unavailable and continue) instead
 // of hanging forever waiting on a response that never comes.
+// ---- Pegasus hub HTTP-to-WS bridge -----------------------------------------
+// The jibo-be jetstream-client sends `/listen/*` and `/proactive/*` over HTTP
+// (that's the API the real jetstream service exposes to skills), but the hub
+// itself only speaks WebSocket at those paths. The real jetstream service
+// translates each HTTP POST into Hubmsg WebSocket messages on its persistent
+// hub connection, then synchronously acks the skill's POST with the booking
+// transaction id (the bridge is jiboV2/jetstream JetHttpHandler.cc /
+// LhubClient.cc). bridgeViaHub does the same thing in-browser, sending the
+// translated Hubmsg(s) on the realSocket already open to the hub and
+// responding to the POST with `{ requestID: <transID> }`. Async hub events
+// then come back over the same WS and realSocket's onmessage aliases
+// transID->requestID for jetstream-client.
+
+function _hubUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+// Translate a jetstream-client HTTP body into the Hubmsg(s) the hub expects
+// for that path. Returns an array — start_local_turn can be 2 messages
+// (LISTEN + CLIENT_NLU/CLIENT_ASR), most others are single.
+function _buildHubMessages(path, body, transID) {
+  const ts = Date.now();
+  const mid = () => 'mid:' + _hubUuid();
+  if (path === '/listen/start_local_turn') {
+    const msgs = [{
+      type: 'LISTEN', msgID: mid(), transID, ts,
+      data: {
+        lang: body.language || 'en-us',
+        hotphrase: !!body.hotphrase,
+        rules: body.nluRules || [],
+        mode: 'turn',
+        asr: {
+          hints: body.hintPhrases || [],
+          earlyEOS: body.earlyEOS || [],
+          encoding: 'opus',
+          sampleRate: 16000,
+          sosTimeout: body.sosTimeout > 0 ? Math.round(body.sosTimeout * 1000) : -1,
+          maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
+        },
+      },
+    }];
+    if (body.clientNLU != null) {
+      const nluData = typeof body.clientNLU === 'string'
+        ? (() => { try { return JSON.parse(body.clientNLU); } catch (_) { return { intent: body.clientNLU }; } })()
+        : body.clientNLU;
+      msgs.push({ type: 'CLIENT_NLU', msgID: mid(), transID, ts, data: nluData });
+    } else if (body.clientASR) {
+      msgs.push({ type: 'CLIENT_ASR', msgID: mid(), transID, ts, data: { text: String(body.clientASR) } });
+    }
+    return msgs;
+  }
+  if (path === '/listen/mimic_global_turn') {
+    const data = body.nlu || body.clientNLU || body;
+    return [{ type: 'CLIENT_NLU', msgID: mid(), transID: 'GLOBAL', ts, data }];
+  }
+  if (path === '/listen/update_local_turn') {
+    const data = body.nlu || body.clientNLU || body;
+    return [{ type: 'CLIENT_NLU', msgID: mid(), transID, ts, data }];
+  }
+  if (path === '/listen/cancel_local_turn' || path === '/listen/cancel_any_turn') {
+    return [{ type: 'CANCEL', msgID: mid(), transID, ts, data: {} }];
+  }
+  if (path === '/listen/subscribe_global') {
+    return [{ type: 'SUBSCRIBE_GLOBAL', msgID: mid(), transID, ts, data: body || {} }];
+  }
+  if (path === '/listen/unsubscribe_global' || path === '/listen/unsubscribe_all_globals') {
+    return [{ type: 'UNSUBSCRIBE_GLOBAL', msgID: mid(), transID, ts, data: body || {} }];
+  }
+  if (path === '/listen/set_hj_mode') {
+    return [{ type: 'SET_HJ_MODE', msgID: mid(), transID, ts, data: body || {} }];
+  }
+  if (path === '/listen/get_hj_mode') {
+    return [{ type: 'GET_HJ_MODE', msgID: mid(), transID, ts, data: body || {} }];
+  }
+  if (path === '/proactive/trigger') {
+    const data = typeof body === 'object' ? body : { payload: String(body) };
+    return [{ type: 'TRIGGER', msgID: mid(), transID, ts, data }];
+  }
+  return [];
+}
+
+// Synthesize a Node-style HTTP response with the given JSON body, fired async
+// so callers can register on('data')/on('end') first.
+function _synthHttpJson(cb, obj) {
+  const text = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  const respHandlers = {};
+  const resp = {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    setEncoding() {},
+    on(ev, h) { (respHandlers[ev] = respHandlers[ev] || []).push(h); return resp; },
+    once(ev, h) { return resp.on(ev, h); },
+  };
+  if (cb) cb(resp);
+  setTimeout(() => {
+    (respHandlers.data || []).forEach((h) => { try { h(text); } catch (_) { /* listener threw */ } });
+    (respHandlers.end || []).forEach((h) => { try { h(); } catch (_) { /* listener threw */ } });
+  }, 0);
+}
+
+function bridgeViaHub(options, body, cb, reqHandlers, host) {
+  const key = host + (options.port ? ':' + options.port : '');
+  const reg = (typeof window !== 'undefined' && window.__hubSockets) || {};
+  const ws = reg[key] || reg[host];
+  if (!ws || ws.readyState !== 1) {
+    setTimeout(() => (reqHandlers.error || []).forEach((h) => { try { h(new Error('hub WS not open for ' + key)); } catch (_) { /* */ } }), 0);
+    return;
+  }
+  let bodyObj = {};
+  try { bodyObj = JSON.parse(body.join('') || '{}'); } catch (_) { /* leave empty */ }
+  // For mimic_global_turn we use the literal "GLOBAL" transID per the bridge;
+  // otherwise generate a per-turn id used as both transID and the requestID we
+  // hand back to the skill (per LhubClient.cc: requestID == transaction_id).
+  const transID = options.path === '/listen/mimic_global_turn' ? 'GLOBAL' : 'tid:' + _hubUuid();
+  const msgs = _buildHubMessages(options.path, bodyObj, transID);
+  if (!msgs.length) {
+    _synthHttpJson(cb, { requestID: transID }); // unknown path, give the skill *something*
+    return;
+  }
+  for (const m of msgs) { try { ws.send(JSON.stringify(m)); } catch (_) { /* socket race */ } }
+  _synthHttpJson(cb, { requestID: transID });
+}
+
 // Node-style http.request implemented on top of browser `fetch`, so jibo's
 // service clients (e.g. jetstream-client.sendPostRequest -> Pegasus hub) actually
 // reach the network. Replaces the earlier fail-fast shim, which silently dropped
@@ -423,7 +549,17 @@ function makeHttpClient() {
       // which doesn't enforce it). The proxy strips that boundary.
       let url = directUrl;
       const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
-      if (server && upstreamHost === server) {
+      const isPegasus = server && upstreamHost === server;
+      // The Pegasus hub speaks the WS-only protocol at /listen and /proactive.
+      // jetstream-client sends those as HTTP POSTs (the way the real jetstream
+      // service exposes them to skills). Translate to hub WS messages over the
+      // already-open hub socket (registered by realSocket) and synthesize the
+      // ack the skill expects — { requestID: <transID> }. Mirrors what
+      // jiboV2/jetstream JetHttpHandler does in the real service.
+      if (isPegasus && /^\/(listen|proactive)\//.test(options.path || '')) {
+        return bridgeViaHub(options, body, cb, reqHandlers, upstreamHost);
+      }
+      if (isPegasus) {
         url = `/__cloud${options.path || '/'}`;
         init.headers['X-Cloud-Upstream'] = `${upstreamHost}${upstreamPort ? ':' + upstreamPort : ''}`;
       }
@@ -491,6 +627,13 @@ function makeFakeWs() {
   Socket.prototype.close = function () { this.readyState = 3; this.emit('close'); };
   Socket.prototype.terminate = function () { this.readyState = 3; };
 
+  // Registry of live hub WebSockets keyed by host, populated by realSocket on
+  // open. The HTTP-to-WS bridge (see http.request below) dispatches /listen/*
+  // POSTs via the matching open socket rather than HTTP-proxying them, because
+  // the Pegasus hub only speaks WebSocket at those paths.
+  if (typeof window !== 'undefined' && !window.__hubSockets) window.__hubSockets = {};
+  function hostFromUrl(u) { try { return new URL(u).host; } catch (_) { return ''; } }
+
   // Bridge a real browser WebSocket to the `ws`-package event interface, so the
   // configured backend server (e.g. a Pegasus jetstream at ws://pegasus.jibo:8090)
   // is actually reached instead of the in-memory fake.
@@ -500,7 +643,11 @@ function makeFakeWs() {
     sock.readyState = 0;
     let real;
     try { real = new window.WebSocket(url); } catch (e) { setTimeout(() => sock.emit('error', e), 0); return sock; }
-    real.onopen = () => { sock.readyState = 1; sock.emit('open'); };
+    real.onopen = () => {
+      sock.readyState = 1;
+      try { const h = hostFromUrl(url); if (h && typeof window !== 'undefined' && window.__hubSockets) window.__hubSockets[h] = real; } catch (_) {}
+      sock.emit('open');
+    };
     // The pegasus hub speaks Hubmsg {type, ts, msgID, transID, ...} on its
     // socket; the robot-side jetstream-client expects WSmsg {type, ts, requestID,
     // transID, ...} and rejects events lacking requestID. Per jiboV2/jetstream
@@ -523,7 +670,11 @@ function makeFakeWs() {
       }
       sock.emit('message', data);
     };
-    real.onclose = () => { sock.readyState = 3; sock.emit('close'); };
+    real.onclose = () => {
+      sock.readyState = 3;
+      try { const h = hostFromUrl(url); if (h && typeof window !== 'undefined' && window.__hubSockets && window.__hubSockets[h] === real) delete window.__hubSockets[h]; } catch (_) {}
+      sock.emit('close');
+    };
     real.onerror = (e) => sock.emit('error', e);
     sock.send = (data) => { try { real.send(data); } catch (_) { /* not open */ } };
     sock.close = () => { try { real.close(); } catch (_) { /* already closed */ } };
