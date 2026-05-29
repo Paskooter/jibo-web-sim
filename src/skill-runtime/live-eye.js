@@ -505,6 +505,28 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
+  // Lifecycle.finished crashes under UNIT_TESTS: its init (jibo.js:7841)
+  // returns early without creating `this._client`, and every phase-end
+  // callsite (~10 places in jibo.js, plus skill graphs) does
+  //   `this._client.send({ command: 'finished' })`
+  // which throws "Cannot read properties of undefined (reading 'send')".
+  // The error is non-fatal but recurring — every news headline / mim
+  // completion fires it, spamming hundreds of identical exceptions per
+  // skill. Replace finished() with a no-op that swallows the missing
+  // client. The ipc.send branch was already gated by Runtime.ipcRenderer
+  // and continues to work for the EventEmitter fallback.
+  try {
+    const lc = jibo && jibo.lifecycle;
+    if (lc && typeof lc.finished === 'function' && !lc.__webPatched) {
+      lc.__webPatched = true;
+      const origFinished = lc.finished.bind(lc);
+      lc.finished = function patchedFinished() {
+        if (!lc._client || typeof lc._client.send !== 'function') return;
+        try { return origFinished(); } catch (_) { /* still tolerate */ }
+      };
+    }
+  } catch (e) { console.warn('[live-eye] lifecycle patch:', e.message); }
+
   // Audio playback: the sandboxed iframe never gets user activation
   // (sandbox=allow-scripts,allow-same-origin, no allow-user-activation), so
   // its AudioContext stays in 'suspended' state and Web Audio buffer playback
@@ -541,12 +563,17 @@ export function initOfflineServices(jibo, requireFn) {
         try {
           if (typeof src === 'string' && src && typeof window !== 'undefined' && window.parent) {
             const id = ++_seq;
-            // Map a bundle path (/external-skills/...) — already HTTP-relative —
-            // straight through to the host. If src is absolute file path inside
-            // node_modules, rewrite onto our HTTP origin.
+            // Rewrite to the HTTP-served path. mirrors cjs-require's mapUrl
+            // logic: paths under /node_modules/ get rebased onto the skill
+            // dir so external-skill bundle URLs resolve under our HTTP root.
+            // (the report-skill cloud SKILL_ACTION emits anim-db sound refs
+            //  like 'jibo-anim-db-animations/audio/sfx/.../*.ogg' which the
+            //  loader resolves to /node_modules/jibo-anim-db-animations/...
+            //  — that absolute path has to be served under our skill dir.)
+            const skillDir = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
             let url = src;
             const i = src.lastIndexOf('/node_modules/');
-            if (i >= 0) url = location.origin + src.slice(i);
+            if (i >= 0) url = location.origin + (skillDir || '') + src.slice(i);
             else if (src.indexOf('/external-skills/') >= 0) url = location.origin + src.slice(src.indexOf('/external-skills/'));
             else if (src[0] === '/') url = location.origin + src;
             const fin = () => {
