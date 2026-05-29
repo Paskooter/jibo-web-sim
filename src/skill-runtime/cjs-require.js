@@ -425,13 +425,17 @@ function _buildHubMessages(path, body, transID) {
   const ts = Date.now();
   const mid = () => 'mid:' + _hubUuid();
   if (path === '/listen/start_local_turn') {
+    // LhubClient.cc picks LISTEN.mode by whether the skill is sending pre-resolved
+    // input: CLIENT_NLU (typed chat / NLU payload), CLIENT_ASR (typed transcript)
+    // or the default audio path. The hub rejects 'turn'.
+    const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : 'ASR');
     const msgs = [{
       type: 'LISTEN', msgID: mid(), transID, ts,
       data: {
         lang: body.language || 'en-us',
         hotphrase: !!body.hotphrase,
         rules: body.nluRules || [],
-        mode: 'turn',
+        mode,
         asr: {
           hints: body.hintPhrases || [],
           earlyEOS: body.earlyEOS || [],
