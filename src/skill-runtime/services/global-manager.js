@@ -137,7 +137,11 @@ export class GlobalManagerService {
       },
       onConnection(serverSock) {
         self.clients.add(serverSock);
-        if (typeof serverSock.on === 'function') serverSock.on('close', () => self.clients.delete(serverSock));
+        console.log('[global-manager] /globals client connected (total=' + self.clients.size + ')');
+        if (typeof serverSock.on === 'function') serverSock.on('close', () => {
+          self.clients.delete(serverSock);
+          console.log('[global-manager] /globals client disconnected (total=' + self.clients.size + ')');
+        });
       },
     };
     window.__wsServers.push(this._serverEntry);
@@ -164,6 +168,7 @@ export class GlobalManagerService {
   }
 
   _onTurnResult(data, isGlobal) {
+    console.log('[global-manager] turn result:', isGlobal ? 'GLOBAL' : 'LOCAL', 'status=', data && data.status, 'intent=', (data && data.result && data.result.nlu && data.result.nlu.intent), 'match=', (data && data.result && data.result.match));
     // Status mirrors jetstream-client TurnResultType — SUCCEEDED is the only
     // status that carries a usable ListenResult. FAILED/TIMEDOUT/etc. surface
     // through SharedGlobalEvents.noGlobalMatch on the be side.
@@ -175,16 +180,19 @@ export class GlobalManagerService {
     const globalCmd = resolveGlobalCommand(intent);
     if (globalCmd) {
       // Volume etc. — match isn't needed; onGlobal reads result.nlu.intent.
+      console.log('[global-manager] -> global', globalCmd);
       this._broadcast({ status: 'OK', message: 'global', result: this._serializeResult(result) });
       return;
     }
 
     const skillID = resolveSkillID(result);
     if (!skillID) {
+      console.log('[global-manager] no skill match (intent=', intent, ') — dropping');
       // No skill match and not a global command — be's noGlobalMatch path
       // handles it locally. Nothing to push.
       return;
     }
+    console.log('[global-manager] -> skill-relaunch', skillID, '(clients=' + this.clients.size + ')');
 
     // Ensure the forwarded result has a usable `match` block. The hub may
     // have left match:null; synthesize one from nlu.entities.skill /

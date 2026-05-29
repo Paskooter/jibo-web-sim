@@ -316,6 +316,62 @@ export function initOfflineServices(jibo, requireFn) {
       if (jibo.kb.initLoop && !jibo.kb.loop) jibo.kb.initLoop();
     }
   } catch (e) { console.warn('[live-eye] kb init:', e.message); }
+
+  // ServicesPlugin (jibo.js) bundles three service-specific init functions —
+  // global-manager / kb / remote — and skips ALL of them under UNIT_TESTS. KB
+  // is already covered above; here we run the global-manager equivalent so
+  // jibo.globalEvents opens its /globals WebSocket (the cloud→skill-switch
+  // pipe) against our in-browser GlobalManagerService. Without this, every
+  // localTurnResult lands silently — the service has no connected client to
+  // broadcast to.
+  try {
+    const gmRec = recordFor('global-manager');
+    if (gmRec && jibo.globalEvents && typeof jibo.globalEvents.init === 'function' && !jibo.__globalEventsInited) {
+      jibo.__globalEventsInited = true;
+      jibo.globalEvents.init(gmRec, (err) => {
+        if (err) console.warn('[live-eye] globalEvents.init:', (err && err.message) || err);
+      });
+    }
+  } catch (e) { console.warn('[live-eye] globalEvents.init:', e.message); }
+
+  // The Media plugin (`jibo.media`) opens a connection to the local
+  // media-service in non-UNIT_TESTS. Skill audio playback (sfx, music tracks)
+  // queries jibo.media for routing; if init never ran, those calls may NPE
+  // when a skill plays back audio. The init is connection-free — it just
+  // wires up the in-process Media class — so safe to run.
+  try {
+    if (jibo.media && typeof jibo.media.init === 'function' && !jibo.media.__inited) {
+      jibo.media.__inited = true;
+      jibo.media.init(() => {});
+    }
+  } catch (e) { console.warn('[live-eye] media.init:', e.message); }
+
+  // Expression plugin: subscribes the local face renderer to the expression
+  // service's `dofs` events. Without it, jibo.face.eye won't reflect any
+  // cloud-driven expression cues. Connection-free if we just bind the local
+  // event handler — see ExpressionPlugin.init's body.
+  try {
+    if (jibo.expression && typeof jibo.expression.init === 'function' && !jibo.expression.__inited) {
+      const expRec = recordFor('expression');
+      if (expRec) {
+        jibo.expression.__inited = true;
+        // The plugin chains .init(port, jibo).then(...) to bind to events.dofs.
+        const r = jibo.expression.init(expRec.port, jibo);
+        if (r && typeof r.then === 'function') {
+          r.then(() => {
+            try {
+              if (jibo.expression.events && jibo.expression.events.dofs && jibo.face && jibo.face.eye) {
+                jibo.expression.events.dofs.on((data) => {
+                  try { jibo.face.eye.display(data.timestamp, data.dofValues, data.metadata); }
+                  catch (_) { /* eye may not be ready */ }
+                });
+              }
+            } catch (_) { /* */ }
+          }).catch((e) => console.warn('[live-eye] expression.init:', e && e.message));
+        }
+      }
+    }
+  } catch (e) { console.warn('[live-eye] expression.init:', e.message); }
 }
 
 // BeSkill.init chains the framework's plugins and aborts the whole boot if any one
