@@ -571,23 +571,32 @@ function bridgeViaHub(options, body, cb, reqHandlers, host) {
 
   const emitToSkill = (obj) => { if (!eventSock) return; try { eventSock.emit('message', JSON.stringify(obj)); } catch (_) { /* */ } };
   const pending = msgs.map((m) => JSON.stringify(m));
+  console.log('[hub-bridge] open', transID, 'path=', options.path, '->', proxyUrl);
   turnWS.onopen = () => {
-    for (const m of pending) { try { turnWS.send(m); } catch (_) { /* */ } }
-    // Mirror ListenLoop.cc:321 — emit TURN_STARTED to the skill once the hub
-    // connection is up and the turn has been kicked off.
-    if (!isGlobal) emitToSkill({ ts: Date.now(), type: 'TURN_STARTED', transID, requestID });
+    console.log('[hub-bridge] WS open', transID, 'sending', pending.length, 'msg(s)');
+    for (const m of pending) {
+      console.log('[hub-bridge]   ->', m.slice(0, 200));
+      try { turnWS.send(m); } catch (e) { console.warn('[hub-bridge] send threw', e.message); }
+    }
+    if (!isGlobal) {
+      const ts = { ts: Date.now(), type: 'TURN_STARTED', transID, requestID };
+      console.log('[hub-bridge] emit TURN_STARTED', transID);
+      emitToSkill(ts);
+    }
   };
   turnWS.onmessage = (ev) => {
     let raw = ev.data;
-    if (typeof raw !== 'string') { return; } // upstream should be text frames now
+    console.log('[hub-bridge] <-', transID, 'type=', typeof raw, String(raw).slice(0, 200));
+    if (typeof raw !== 'string') { return; }
     try {
       const hubMsg = JSON.parse(raw);
       const events = _translateHubMsg(hubMsg, transID, requestID, isGlobal);
+      console.log('[hub-bridge]   translated -> ', events.length, events.map((e) => e.type).join(','));
       for (const e of events) emitToSkill(e);
-    } catch (_) { /* not JSON — drop */ }
+    } catch (e) { console.warn('[hub-bridge] parse failed', e.message); }
   };
-  turnWS.onerror = (e) => { console.warn('[cloud] turn WS error', transID, e && e.message); };
-  turnWS.onclose = () => { /* per-turn WS closed; ListenLoop already emitted TURN_RESULT */ };
+  turnWS.onerror = (e) => { console.warn('[hub-bridge] WS error', transID, e && e.message); };
+  turnWS.onclose = (e) => { console.log('[hub-bridge] WS close', transID, 'code=', e.code, 'reason=', e.reason); };
 
   _synthHttpJson(cb, { requestID });
 }
