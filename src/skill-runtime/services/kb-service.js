@@ -27,12 +27,51 @@ function seedData(kbName) {
   if (kbName === 'skills-config') return { hasAlreadyLaunchedFirstContact: true };
   return {};
 }
+// Seed child nodes + root-edge layers per slice. Some plugins query the
+// root for an edge layer and warn loudly when the result is empty, even
+// though the empty-list path is "no data" not "broken". A single inert
+// placeholder per layer (e.g. a disabled holiday) suppresses the warn
+// without changing observable behavior — filters that read the placeholder
+// just skip it (isEnabled:false / category:'placeholder' etc.).
+function seedChildren(kbName, root) {
+  const s = storeFor(kbName);
+  const now = Date.now();
+  const addChild = (layer, child) => {
+    child._id = child._id || uuid();
+    child.created = child.created || now;
+    child.updated = now;
+    s.nodes.set(child._id, child);
+    root.edges = root.edges || {};
+    root.edges[layer] = root.edges[layer] || [];
+    if (root.edges[layer].indexOf(child._id) < 0) root.edges[layer].push(child._id);
+  };
+  if (kbName === '/jibo/holidays' || kbName === 'jibo/holidays') {
+    // @be/be-framework's HolidayBeSkillPlugin (Holiday.fetchHolidayList) warns
+    // "KB returned no holiday list" if root.edges.holiday is empty, then
+    // "No active holiday data" downstream. Seed one disabled holiday so
+    // the list is non-empty; filterEnabledHolidayNames drops it (isEnabled
+    // false) and getActiveHolidaySet() returns an empty Set — same end
+    // state, no warning.
+    addChild('holiday', {
+      _id: '_placeholder_holiday',
+      type: 'holiday',
+      data: {
+        name: '_placeholder',
+        isEnabled: false,
+        category: 'placeholder',
+        date: '2099-12-31',
+        endDate: '2099-12-31',
+      },
+    });
+  }
+}
 function makeRoot(kbName) {
   const s = storeFor(kbName);
   const now = Date.now();
   const root = { _id: uuid(), type: 'root', data: seedData(kbName), created: now, updated: now };
   s.nodes.set(root._id, root);
   s.rootId = root._id;
+  seedChildren(kbName, root);
   return root;
 }
 
