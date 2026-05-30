@@ -256,7 +256,13 @@ function makeHttpFs() {
   // Skip files the manifest says don't exist (avoids 404 console noise). Normalize
   // `/./` first — the manifest is normalized, but skills resolve `./assets/x` to
   // `.../skill/./assets/x`, which would otherwise be wrongly flagged missing.
+  // Also short-circuit FHS-style absolute paths the on-robot bundle probes for
+  // (/var/jibo/identity.json, /.jibo/t.logging.json, /src/package.json, etc.) —
+  // these never exist on our HTTP server and every probe lands as a 404 in
+  // devtools even though the bundle has a try/catch fallback for each.
+  const isAbsentFhsPath = (u) => /^\/(opt|var|etc|root|home|usr|sys|proc|tmp|\.jibo|src(\/|$))/.test(String(u));
   function knownMissing(url) {
+    if (isAbsentFhsPath(url)) return true;
     const m = typeof window !== 'undefined' && window.__skillManifest;
     const root = typeof window !== 'undefined' && window.__SKILL_DIR__;
     const norm = String(url).split('?')[0].replace(/\/\.(?=\/)/g, '').replace(/\/\.$/, '');

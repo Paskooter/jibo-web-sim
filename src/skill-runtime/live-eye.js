@@ -363,8 +363,25 @@ export function installExpressionStubs(jibo, requireFn) {
     for (const m of EXPRESSION_METHODS) {
       if (typeof ex[m] === 'function' || ex[m] === undefined) ex[m] = () => Promise.resolve(tolerant());
     }
-    ex.createAnimation = (opts) => Promise.resolve(makeAnimInstance(requireFn, false, opts));
-    ex.createAndPlayAnimation = (opts) => Promise.resolve(makeAnimInstance(requireFn, true, opts));
+    // Diagnostic: log every animation instance creation so we can tell which
+    // anim tags get through resolveAssetToPlayback. Helpful for tracking down
+    // missing dance/etc. anims — if a `<anim cat='dance' ...>` produces no
+    // create log line, the resolver dropped the node silently.
+    const summarize = (opts) => {
+      if (!opts) return '<no-opts>';
+      const src = opts.src || '<no-src>';
+      const data = opts.data;
+      const ch = data && data.content && Array.isArray(data.content.channels) ? data.content.channels.length : '-';
+      return `src=${src} ch=${ch}`;
+    };
+    ex.createAnimation = (opts) => {
+      console.log('[live-eye] createAnimation:', summarize(opts));
+      return Promise.resolve(makeAnimInstance(requireFn, false, opts));
+    };
+    ex.createAndPlayAnimation = (opts) => {
+      console.log('[live-eye] createAndPlayAnimation:', summarize(opts));
+      return Promise.resolve(makeAnimInstance(requireFn, true, opts));
+    };
     // events/features are normally set during the (skipped) expression init.
     if (!ex.events) ex.events = { dofs: { on() {}, off() {} }, kinematics: { on() {}, off() {} } };
     if (!ex.features) ex.features = tolerant();
