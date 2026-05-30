@@ -78,11 +78,26 @@ export function createRequire(jibo) {
   // Collapse `/./` (and trailing `/.`) before the lookup, or real files get
   // wrongly flagged missing and never fetched (radio's defaultStations.json).
   const normPath = (u) => String(u).split('?')[0].replace(/\/\.(?=\/)/g, '').replace(/\/\.$/, '');
-  const knownMissing = (url) => manifest && skillRoot && url.indexOf(skillRoot) === 0 && !manifest.has(normPath(url));
+  // When a manifest is loaded, ANY path is decidable: under skillRoot we check
+  // the manifest, OUTSIDE skillRoot it's guaranteed missing (we only serve the
+  // bundle's own tree). This also kills the require-walk's higher node_modules/
+  // 404s (the loop probes /external-skills/node_modules/X, /node_modules/X
+  // after exhausting the skill's own — none ever exist).
+  const knownMissing = (url) => {
+    if (!manifest || !skillRoot) return false;
+    if (url.indexOf(skillRoot) !== 0) return true;
+    return !manifest.has(normPath(url));
+  };
+  // FHS-style absolute paths the production runtime probes for on-robot files
+  // (jibo-tbd version, /var/jibo/identity.json, /.jibo/t.logging.json, etc.).
+  // None exist on our HTTP server — the bundle has try/catch fallbacks for each,
+  // but the underlying XHR still lands in devtools as a 404. Short-circuit them
+  // so the bundle takes the same fallback path silently.
+  const isAbsentAbsolute = (u) => /^\/(opt|var|etc|root|home|usr|sys|proc|tmp|\.jibo|src(\/|$))/.test(String(u));
   function fetchTextSync(url) {
     if (url in textCache) return textCache[url];
     // Don't even request files the manifest says aren't there (avoids 404 noise).
-    if (knownMissing(url)) { textCache[url] = null; return null; }
+    if (knownMissing(url) || isAbsentAbsolute(url)) { textCache[url] = null; return null; }
     let text = null;
     try {
       const xhr = new NativeXHR();

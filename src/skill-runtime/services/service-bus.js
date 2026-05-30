@@ -74,16 +74,29 @@ export class ServiceBus {
       const port = Number(m[2]);
       return bus.byPort.has(port) ? { port, path: m[3] || '/' } : null;
     };
-    function BusXHR() { this._real = new Real(); this._t = null; this._ls = {}; this.readyState = 0; this.status = 0; this.responseText = ''; this.response = ''; this.responseType = ''; }
-    BusXHR.prototype.open = function (method, url, async) { this._method = method; this._async = async !== false; this._t = target(url); if (!this._t) this._real.open(method, url, this._async); };
-    BusXHR.prototype.setRequestHeader = function (k, v) { if (!this._t) this._real.setRequestHeader(k, v); };
-    BusXHR.prototype.getResponseHeader = function (k) { return this._t ? null : this._real.getResponseHeader(k); };
-    BusXHR.prototype.getAllResponseHeaders = function () { return this._t ? '' : this._real.getAllResponseHeaders(); };
-    BusXHR.prototype.abort = function () { if (!this._t) this._real.abort(); };
-    BusXHR.prototype.addEventListener = function (ev, cb) { (this._ls[ev] = this._ls[ev] || []).push(cb); if (!this._t) this._real.addEventListener(ev, cb); };
-    BusXHR.prototype.removeEventListener = function (ev, cb) { if (!this._t) this._real.removeEventListener(ev, cb); };
+    // Hosts the production bundle POSTs telemetry to (LibraryAnalytics ->
+    // segment.com pipeline) that we have no working endpoint for. Their DNS
+    // resolves to nothing in our env, so every flush surfaces as
+    // `net::ERR_CONNECTION_REFUSED` in devtools. Short-circuit them with a
+    // 204 No Content so the bundle's `then`/`catch` paths see a clean
+    // discard instead of repeated network errors.
+    const blackholed = (url) => /^https?:\/\/(segment\.jibo\.com|api\.segment\.io)(\/|$)/i.test(String(url));
+    function BusXHR() { this._real = new Real(); this._t = null; this._blackhole = false; this._ls = {}; this.readyState = 0; this.status = 0; this.responseText = ''; this.response = ''; this.responseType = ''; }
+    BusXHR.prototype.open = function (method, url, async) { this._method = method; this._async = async !== false; this._t = target(url); this._blackhole = !this._t && blackholed(url); if (!this._t && !this._blackhole) this._real.open(method, url, this._async); };
+    BusXHR.prototype.setRequestHeader = function (k, v) { if (!this._t && !this._blackhole) this._real.setRequestHeader(k, v); };
+    BusXHR.prototype.getResponseHeader = function (k) { return (this._t || this._blackhole) ? null : this._real.getResponseHeader(k); };
+    BusXHR.prototype.getAllResponseHeaders = function () { return (this._t || this._blackhole) ? '' : this._real.getAllResponseHeaders(); };
+    BusXHR.prototype.abort = function () { if (!this._t && !this._blackhole) this._real.abort(); };
+    BusXHR.prototype.addEventListener = function (ev, cb) { (this._ls[ev] = this._ls[ev] || []).push(cb); if (!this._t && !this._blackhole) this._real.addEventListener(ev, cb); };
+    BusXHR.prototype.removeEventListener = function (ev, cb) { if (!this._t && !this._blackhole) this._real.removeEventListener(ev, cb); };
     BusXHR.prototype._fire = function (ev) { if (typeof this['on' + ev] === 'function') this['on' + ev].call(this, {}); (this._ls[ev] || []).forEach((f) => f.call(this, {})); };
     BusXHR.prototype.send = function (body) {
+      if (this._blackhole) {
+        // Pretend the analytics endpoint accepted the batch — 204 No Content,
+        // empty body, success fire order. Async to match real XHR semantics.
+        setTimeout(() => { this.status = 204; this.readyState = 4; this.responseText = ''; this.response = ''; this._fire('readystatechange'); this._fire('load'); }, 0);
+        return;
+      }
       if (!this._t) {
         const r = this._real;
         r.onreadystatechange = () => { this.readyState = r.readyState; this.status = r.status; try { this.responseText = r.responseText; } catch (_) { /* responseType */ } this.response = r.response; this._fire('readystatechange'); };

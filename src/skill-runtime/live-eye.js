@@ -476,6 +476,59 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] kb init:', e.message); }
 
+  // InteractionMemoryPlugin (jibo.js:7734) skips under UNIT_TESTS — so
+  // jibo-interaction-memory's `exports._memory` is undefined. @be/greetings'
+  // ShouldDoMorningGreetingState calls `getTimeSinceLast(...)` and
+  // GreetingsSkill's session-create calls `noteEvent(...)`; both crash
+  // ("Cannot read properties of undefined (reading 'getTimeSinceLast' /
+  // 'noteEvent')") and the skill's first turn aborts. Init the singleton
+  // ourselves — it's connection-free (in-memory event list).
+  try {
+    const im = requireFn && requireFn('jibo-interaction-memory');
+    if (im && im.api && typeof im.api.init === 'function' && !im._memory) {
+      im.api.init(jibo);
+    }
+  } catch (e) { console.warn('[live-eye] im.init:', e.message); }
+
+  // CloudResponseRegistry.cull (jetstream-client.js:541) rejects every entry
+  // that's been pending > 10s with an Error('Timeout … reached. Culling cloud
+  // response'). The ExtPromiseWrapper.reject hits the registry's internal
+  // Promise — but in our flow the Promise has no .catch (the matching
+  // SKILL_ACTION already arrived through our M47 direct path, or the entry
+  // is an orphan from a timed-out turn). Devtools then logs an unhandled
+  // rejection per cull cycle. Attach a global filter so the timeout reason
+  // is silently swallowed; any other rejection still surfaces.
+  try {
+    if (typeof window !== 'undefined' && !window.__cullSwallowInstalled) {
+      window.__cullSwallowInstalled = true;
+      window.addEventListener('unhandledrejection', (ev) => {
+        const r = ev && ev.reason;
+        const msg = r && (r.message || r);
+        if (typeof msg === 'string' && /Culling cloud response/.test(msg)) {
+          ev.preventDefault();
+        }
+      });
+    }
+  } catch (e) { console.warn('[live-eye] cull swallow:', e.message); }
+
+  // console.time/timeEnd noise: the bundle's keyframe loader times every
+  // animation load under the single name "Asset loading", but `console.time`
+  // warns "Timer 'X' already exists" when called twice without an intervening
+  // `timeEnd`, and `timeEnd` warns "Timer 'X' does not exist" when the timer
+  // was already stopped. Both are non-fatal but spam the console once per
+  // animation. Idempotent wrappers — startWith-timeEnd if already running,
+  // skip if not — give the bundle the same measurement semantics with no log.
+  try {
+    if (typeof console !== 'undefined' && !console.__timersIdempotent) {
+      console.__timersIdempotent = true;
+      const _timers = new Set();
+      const _time = console.time.bind(console);
+      const _timeEnd = console.timeEnd.bind(console);
+      console.time = function (label) { if (_timers.has(label)) { try { _timeEnd(label); } catch (_) { /* */ } } _timers.add(label); return _time(label); };
+      console.timeEnd = function (label) { if (!_timers.has(label)) return; _timers.delete(label); try { return _timeEnd(label); } catch (_) { /* */ } };
+    }
+  } catch (e) { console.warn('[live-eye] console.time patch:', e.message); }
+
   // ServicesPlugin (jibo.js) bundles three service-specific init functions —
   // global-manager / kb / remote — and skips ALL of them under UNIT_TESTS. KB
   // is already covered above; here we run the global-manager equivalent so

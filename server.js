@@ -95,12 +95,22 @@ app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redi
 // Recursive file manifest for a served skill dir. The CommonJS require shim uses
 // this to resolve modules WITHOUT probing (each missing probe is a console 404),
 // which otherwise floods the devtools console with thousands of failed requests.
+// Supports both external bundles (/external-skills/...) and in-repo demo skills
+// (/skills/...). With a manifest in hand the shim treats every path outside the
+// skill root as known-missing, eliminating the require()-walk's higher-up
+// node_modules/ probes (e.g. /node_modules/pixi.js → 404 cascade in SHIM mode).
 app.get('/__list', (req, res) => {
   const root = String(req.query.root || '');
-  const prefix = '/external-skills/';
-  if (!root.startsWith(prefix)) { res.json({ files: [] }); return; }
-  const baseAbs = normalize(join(EXTERNAL_SKILLS, root.slice(prefix.length)));
-  if (!baseAbs.startsWith(normalize(EXTERNAL_SKILLS))) { res.status(400).json({ files: [] }); return; }
+  let baseAbs = null;
+  if (root.startsWith('/external-skills/')) {
+    baseAbs = normalize(join(EXTERNAL_SKILLS, root.slice('/external-skills/'.length)));
+    if (!baseAbs.startsWith(normalize(EXTERNAL_SKILLS))) { res.status(400).json({ files: [] }); return; }
+  } else if (root.startsWith('/skills/')) {
+    baseAbs = normalize(join(__dirname, root.replace(/^\//, '')));
+    if (!baseAbs.startsWith(normalize(join(__dirname, 'skills')))) { res.status(400).json({ files: [] }); return; }
+  } else {
+    res.json({ files: [] }); return;
+  }
   const files = [];
   const walk = (absDir, urlDir) => {
     let entries;
@@ -186,6 +196,10 @@ app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
   if (req.body && req.body.length) upreq.write(req.body);
   upreq.end();
 });
+
+// Browser defaults to fetching /favicon.ico — a 204 keeps the address bar
+// from showing a 404 and stops devtools from logging it on every reload.
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 app.use(express.static(__dirname, { extensions: ['html'] }));
 
