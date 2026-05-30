@@ -77,19 +77,49 @@ function _speakViaHost(prompt) {
   });
 }
 
-// Synthesize a token-timings response from the prompt: strip SSML, split on
-// whitespace, lay each word out sequentially with a duration scaled to its
-// length. embodied-dialog's TimelineManager builds a per-word schedule from
-// tokens[0].start / tokens[n-1].end; the speak pipeline also drives
-// `tts.word` events from this same schedule. Identical to the inline
-// implementation that used to live in services/index.js, now in one place.
+// Synthesize a token-timings response from the prompt. embodied-dialog's
+// _generateWordSchedule (jibo-embodied-dialog.js:5454) walks our tokens and
+// pairs each one with a wordNode (word / break / audio / say-as) by name
+// match. CRITICAL: <break/>, <audio/>, <say-as>...</say-as> have to come
+// through as special MARKER tokens — names `<break>`, `<audioBreak>`,
+// `<say-as>` (TTS_BREAK / TTS_AUDIO_BREAK / TTS_SAY_AS at
+// jibo-embodied-dialog.js:4976-4978) — or the resulting wordSchedule is
+// missing entries for those nodes. Any BLOCKING <anim> tag (e.g. the
+// chitchat dance) anchors its timeSyncNode to a break/word node; when that
+// node has no schedule entry, the bundle silently drops the anim at
+// line 5523 ("Could not resolve time-sync information for blocking asset
+// request"). That's why the entire chitchat-dance SLIM produced only the
+// surrounding auto-tagger poses — the dance node never made it to the
+// timeline.
+//
+// We preserve the markers by replacing the relevant tags with sentinel
+// strings BEFORE the tag-stripping pass, then re-expanding them into named
+// tokens with their own time slot during tokenization.
+const _MARK_BREAK = 'BREAK';
+const _MARK_AUDIO = 'AUDIO';
+const _MARK_SAYAS = 'SAYAS';
+function _markupForTiming(text) {
+  return String(text == null ? '' : text)
+    .replace(/<break\b[^>]*\/?>/gi, ` ${_MARK_BREAK} `)
+    .replace(/<audio\b[^>]*\/?>/gi, ` ${_MARK_AUDIO} `)
+    .replace(/<say-as\b[^>]*>/gi, ` ${_MARK_SAYAS} `)
+    .replace(/<\/say-as\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 function _tokenTimes(prompt) {
-  const plain = _toPlain(prompt);
-  const words = plain.split(/\s+/).filter(Boolean);
+  const marked = _markupForTiming(prompt);
+  const words = marked.split(/\s+/).filter(Boolean);
   let t = 0;
   const tokens = words.map((w) => {
-    const dur = Math.max(0.15, w.length * 0.06);
-    const tok = { name: w, start: t, end: t + dur };
+    let name;
+    let dur;
+    if (w === _MARK_BREAK) { name = '<break>'; dur = 0.3; }
+    else if (w === _MARK_AUDIO) { name = '<audioBreak>'; dur = 0.3; }
+    else if (w === _MARK_SAYAS) { name = '<say-as>'; dur = 0.15; }
+    else { name = w; dur = Math.max(0.15, w.length * 0.06); }
+    const tok = { name, start: t, end: t + dur };
     t += dur;
     return tok;
   });
