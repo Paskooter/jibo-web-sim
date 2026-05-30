@@ -697,9 +697,23 @@ export function initOfflineServices(jibo, requireFn) {
       Sound.prototype.play = function play(options) {
         const callOpts = (typeof options === 'function') ? { complete: options } : (options || {});
         const src = this.src;
-        // Local Sound class still runs (decoded buffer + chain), but the iframe's
-        // AudioContext is suspended so nothing is audible. The HOST plays the
-        // file from the same HTTP origin, and we signal complete when it ends.
+        // Two playback paths run side-by-side:
+        //   HOST     — new Audio(url).play() in the parent (M52). Always
+        //              audible (parent has user activation from Start Jibo).
+        //   IFRAME   — origPlay.call(...) below. Drives SoundInstance's Web
+        //              Audio chain (bufferSource → gain → analyser → panner →
+        //              SoundContext._gainNode). We KEEP this call so the
+        //              instance's isPlaying / _instances / timer-events
+        //              state machine behaves identically to a real Sound.play.
+        // The iframe's master gain is force-muted by initOfflineServices'
+        // soundContext patch (set _context.muted=true), so the Web Audio
+        // chain renders silent even if its AudioContext is or becomes
+        // 'running' (which it can — allow-same-origin propagates sticky
+        // activation, so the moment the user clicks anywhere the iframe's
+        // ctx is resumable). Without that mute, BOTH paths emit the same
+        // file with ~30-50ms desync → audible reverb/echo plus clipping
+        // from summed amplitudes.
+        let postedHost = false;
         try {
           if (typeof src === 'string' && src && typeof window !== 'undefined' && window.parent) {
             const id = ++_seq;
@@ -721,15 +735,39 @@ export function initOfflineServices(jibo, requireFn) {
             };
             window.__pendingSounds.set(id, fin);
             window.parent.postMessage({ __jibo: true, kind: 'play-sound', id, src: url, loop: !!this.loop, volume: this.volume }, '*');
+            postedHost = true;
           }
         } catch (e) { console.warn('[live-eye] sound bridge:', e && e.message); }
-        // Still run the original local play (sets isPlaying, event timers, etc.)
-        // even though it's audibly silent — local consumers may check state.
-        return origPlay.call(this, options);
+        // When the host is the source of "done", strip `complete` from
+        // origPlay's options so the iframe's SoundInstance doesn't ALSO
+        // fire it when its (muted) buffer reaches the end — same callback,
+        // two timestamps, could advance dialog state or queue the next
+        // animation twice. Everything else (offset, etc.) passes through.
+        let localOpts = options;
+        if (postedHost) {
+          if (typeof options === 'function') localOpts = {};
+          else localOpts = Object.assign({}, options || {}, { complete: null });
+        }
+        return origPlay.call(this, localOpts);
       };
       console.log('[live-eye] Sound.play routed to host window');
     }
   } catch (e) { console.warn('[live-eye] sound routing failed:', e.message); }
+
+  // Mute the iframe SoundContext's master gain — see Sound.play patch above
+  // for the rationale (avoid double-playback with the host). The bundle's
+  // SoundContext (jibo.sound._context, SoundContext.ts) routes every Sound
+  // chain through a single _gainNode → DynamicsCompressor → destination;
+  // setting .muted=true zeros that gain so the entire chain is silent
+  // regardless of AudioContext state, while leaving the audio graph alive
+  // so timing/state/events behave unchanged.
+  try {
+    const sc = jibo && jibo.sound && jibo.sound._context;
+    if (sc && !sc.__webMuted) {
+      sc.__webMuted = true;
+      sc.muted = true;
+    }
+  } catch (e) { console.warn('[live-eye] sound mute failed:', e.message); }
 
   // AnimDB: jibo's AnimDBPlugin (jibo.js:7463) calls `resolveAnimDB(jibo)`
   // which walks node's Module._resolveFilename from process.cwd() to find
