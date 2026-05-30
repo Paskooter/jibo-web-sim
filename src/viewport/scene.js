@@ -81,11 +81,20 @@ export function createViewport(hostEl) {
 
   const rig = createJiboRig(scene);
 
-  // Resize handling
+  // Resize handling. Pass updateStyle=true (the default) so the canvas's CSS
+  // width/height are pinned to w×h CSS pixels — without this, on a high-DPR
+  // display the backing buffer is w*DPR × h*DPR but the canvas has no CSS
+  // size override, so the browser displays it at the buffer's intrinsic
+  // size (w*DPR × h*DPR CSS pixels). The face overlay's projection uses
+  // viewportEl.clientWidth/Height (= w, h CSS pixels) to compute screen-pixel
+  // corners, so NDC (0,0) maps to (w/2, h/2) — but the actual mesh ends up
+  // drawn at (w, h) on a DPR=2 display. The iframe then floats off the
+  // mesh by half a screen. Pinning canvas CSS size fixes it (DPR=1 displays
+  // unchanged since w*DPR == w).
   function resize() {
     const w = hostEl.clientWidth;
     const h = hostEl.clientHeight;
-    renderer.setSize(w, h, false);
+    renderer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
