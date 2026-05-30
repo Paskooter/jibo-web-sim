@@ -238,14 +238,30 @@ function tolerantStub() {
 // are rebased onto the skill's served root (window.__SKILL_DIR__), so the real
 // jibo LocalLoader's fs.readFile(uri, encoding, cb) loads eye textures etc.
 function makeHttpFs() {
+  // Animation textures (White_Eye.png etc.) shipped under
+  // jibo-anim-db-animations get referenced by KeysAnimation against the
+  // playing skill's assetPack root — so a dance animation queued by
+  // @be/idle looks for it at @be/idle/animations/textures/X. Nimbus
+  // tripped this first (M57's server-side redirect); every @be/* skill
+  // that plays an anim-db named animation will reproduce the same
+  // ENOENT. Rewrite at the fs layer (not just at express) because
+  // knownMissing() consults the skill manifest BEFORE the fetch fires,
+  // so the unrewritten path fails the manifest check and synthesizes
+  // ENOENT before HTTP ever sees the URL.
+  const ANIM_DB_TEX = '/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/';
+  const BE_TEX_RE = /^(.*?)\/@be\/[^/]+\/animations\/textures\/([^/?#]+)$/;
+  function rewriteAnimTexture(p) {
+    const m = BE_TEX_RE.exec(String(p));
+    return m ? ANIM_DB_TEX + m[2] : p;
+  }
   function mapUrl(p) {
     p = String(p);
     if (/^(https?:)?\/\//.test(p)) return p;
     const root = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
     const i = p.lastIndexOf('/node_modules/');
-    if (i >= 0) return root + p.slice(i);
-    if (p[0] === '/') return p;            // already an absolute server path
-    return `${root}/${p}`;
+    if (i >= 0) return rewriteAnimTexture(root + p.slice(i));
+    if (p[0] === '/') return rewriteAnimTexture(p);  // already an absolute server path
+    return rewriteAnimTexture(`${root}/${p}`);
   }
   function toBase64(buf) {
     const bytes = new Uint8Array(buf);

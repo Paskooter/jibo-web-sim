@@ -72,14 +72,17 @@ app.get(/webgl-texture-util\.js$/, (req, res, next) => {
   res.type('application/javascript').send(src.replace(/,\s*\[\s*dxtData\.buffer\s*\|\|\s*dxtData\s*\]\s*\)/g, ')'));
 });
 
-// @be/nimbus references animation textures (White_Eye.png etc.) under its own
-// animations/textures/ folder but the directory doesn't exist in the bundle —
-// nimbus is the "thinking" skill that reuses anim-db's named animations, and
-// they reference the textures relative to nimbus's path. The actual files
-// live in jibo-anim-db-animations/animations/textures/. Redirect missing
-// nimbus texture requests to that bundle so the loader doesn't 404 every
-// frame of a cloud-skill response.
-app.get(/\/@be\/nimbus\/animations\/textures\/([^/?#]+)$/, (req, res, next) => {
+// @be/* skills reference animation textures (White_Eye.png etc.) under their
+// own animations/textures/ folder but the directory doesn't exist in their
+// bundle — the textures live in jibo-anim-db-animations/animations/textures/.
+// Animations themselves come from the shared anim-db (KeysAnimation loads
+// them by name from the global manifest), and their texture refs are
+// resolved relative to the *playing skill's* assetPack root, so each
+// consuming skill needs the same redirect. Nimbus hit this first (M57);
+// @be/idle, @be/clock, @be/main-menu, @be/first-contact etc. all use the
+// same anim-db named animations and reproduce the same ENOENT. Match any
+// @be/<skill>/animations/textures/<file> and probe the anim-db copy.
+app.get(/\/@be\/[^/]+\/animations\/textures\/([^/?#]+)$/, (req, res, next) => {
   const file = req.path.split('/').pop();
   const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${file}`;
   // Probe disk to avoid an infinite loop if the fallback is also missing.
