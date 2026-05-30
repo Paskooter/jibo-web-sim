@@ -527,6 +527,15 @@ function _buildHubMessages(path, body, transID) {
     return [{ type: 'CLIENT_NLU', msgID: mid(), transID: 'GLOBAL', ts, data }];
   }
   if (path === '/listen/update_local_turn') {
+    // LocalTurnRequest.update(asrOrNlu) (jetstream-client.js:946-963) posts a body
+    // with EITHER clientASR (string) OR clientNLU (object). Route to the matching
+    // envelope so the hub parses raw text against the existing turn's rules
+    // instead of treating it as a pre-parsed NLU. Sending CLIENT_NLU here breaks
+    // typed-in "yes/sure" replies — the hub returns intent="sure" literally and
+    // the MIM rejects it (rules expect parsed "yes").
+    if (body && typeof body.clientASR === 'string') {
+      return [{ type: 'CLIENT_ASR', msgID: mid(), transID, ts, data: { text: body.clientASR } }];
+    }
     const data = body.nlu || body.clientNLU || body;
     return [{ type: 'CLIENT_NLU', msgID: mid(), transID, ts, data }];
   }

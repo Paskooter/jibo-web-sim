@@ -147,56 +147,64 @@ async function bootReal() {
     //    requires the cloud (Pegasus); HTTP goes via BusXHR's native pass-through.
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
       const text = m.text.trim();
-      // Routing decision: is a skill-owned Listen (MIM) currently waiting?
-      //   - Active Listen present → inject CLIENT_ASR via .update() into THAT
-      //     turn. The hub parses against the MIM's rules and returns the result
-      //     on the SAME WS the MIM is waiting on. The MIM advances.
-      //     (live-eye.connectCloud monkey-patches jetstream.startLocalTurn to
-      //     stash the active non-launch request at window.__activeListen.)
-      //   - No active Listen (idle) → fall back to a fresh skill-launch turn
-      //     with nluRules:['launch'] so the hub's IntentRouter can match a
-      //     skill match.
-      // Previously we did BOTH paths, which double-counted: the MIM listen
-      // timed out (SOS_TIMEOUT) while a side-channel "yes" landed on the
-      // global path and triggered "No global event found: YES" + 60s
-      // max-transaction-time orphan from the update_local_turn the bundle
-      // sends in response to mim.handleSpeech.emit.
-      let inMim = false;
+      // Stop in-flight Web Speech immediately so the MIM can transition past speak.
+      // Without this the bundle's MimSkill.onSpeechEvent (jibo.js:1593) sees
+      // current=speak and takes the spoofed CLIENT_NLU path, leaving the MIM
+      // stuck on raw intent and ignoring the cloud's parsed NLU.
+      try { window.parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* */ }
+
+      // Path A — active MIM Listen open: inject CLIENT_ASR into THAT turn via
+      // LocalTurnRequest.update(string) (jetstream-client.js:946-963). The hub
+      // parses against the listen's rules and returns the TURN_RESULT on the
+      // same WS the MIM is waiting on; the MIM advances. (live-eye.connectCloud
+      // monkey-patches jetstream.startLocalTurn to stash the active non-launch
+      // request at window.__activeListen.)
       const active = (typeof window !== 'undefined' && window.__activeListen) || null;
       const activeUsable = active && typeof active.update === 'function' && active.status !== 'CANCELED' && active.status !== 'COMPLETED';
       if (activeUsable) {
         try {
           active.update(text);
           console.log('[utterance]', JSON.stringify(text), '-> active listen update');
-          inMim = true;
         } catch (e) { console.warn('[utterance] active listen update failed:', (e && e.message) || e); }
+        return;
       }
-      // ALSO fire the local mim.handleSpeech for any skill-side handler that
-      // wants the raw utterance (action-data UTTERANCE consumers); this is
-      // independent of the cloud parse so it's safe to run alongside.
-      try {
-        const mim = window.jibo && window.jibo.mim;
-        if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function') {
-          mim.handleSpeech.emit({ intent: text, entities: {}, rules: [] });
-        }
-      } catch (e) { console.warn('[boot] handleSpeech forward:', e.message); }
-      if (!inMim) {
-        try {
-          const js = window.jibo && window.jibo.jetstream;
-          if (js && typeof js.startLocalTurn === 'function') {
-            // 'launch' is the meta-rule the pegasus parser uses to union all
-            // skill-launch intents (parser/cli/build-rules.ts builds a single
-            // launch.fst from every */launch.rule). Sending nluRules:['launch']
-            // makes the matched intent come back with NLU.rules=['launch'],
-            // which is what IntentRouter.getSkillIDFromNLU + be's
-            // SharedGlobalEvents check.
-            js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
-              .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
-              .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
-          }
-          console.log('[utterance]', JSON.stringify(text), '-> startLocalTurn (no active listen)');
-        } catch (e) { console.warn('[boot] startLocalTurn forward:', e.message); }
-      }
+
+      // Path B — no active Listen (MIM still in speak, or idle): pre-parse the
+      // text via a fresh launch-rule turn (CLIENT_ASR so the hub PARSES it),
+      // then route the parsed NLU two ways:
+      //   1. global-manager's turnResult listener already handles skill-launch
+      //      matches (via jetstream events).
+      //   2. If no skill match, forward the parsed NLU to mim.handleSpeech.emit
+      //      so the active MIM's onSpeechEvent (jibo.js:1581) sees a canonical
+      //      intent (e.g. "yes" for typed "sure") instead of the raw text the
+      //      MIM would otherwise reject in parseSpoofedUtterance (jibo.js:2157).
+      // Why NOT call handleSpeech.emit synchronously with raw text: the bundle
+      // wraps the raw string as {intent: <raw>}, sends CLIENT_NLU with that
+      // utterance, then locally constructs asrResults from the raw utterance
+      // (NOT the cloud response) at jibo.js:2164. The MIM's rule then sees
+      // intent="sure" instead of the canonical "yes" and rejects.
+      const js = window.jibo && window.jibo.jetstream;
+      if (!js || typeof js.startLocalTurn !== 'function') return;
+      console.log('[utterance]', JSON.stringify(text), '-> startLocalTurn launch (pre-parse)');
+      js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
+        .then((turn) => (turn && turn.promise) ? turn.promise : null)
+        .then((data) => {
+          if (!data || data.status !== 'SUCCEEDED' || !data.result) return;
+          const nlu = data.result.nlu || {};
+          const skillMatch = data.result.match;
+          if (skillMatch) return; // global-manager → skill switch
+          try {
+            const mim = window.jibo && window.jibo.mim;
+            if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function') {
+              mim.handleSpeech.emit({
+                intent: nlu.intent || text,
+                entities: nlu.entities || {},
+                rules: nlu.rules || [],
+              });
+            }
+          } catch (e) { console.warn('[utterance] handleSpeech forward:', (e && e.message) || e); }
+        })
+        .catch((e) => console.warn('[utterance] startLocalTurn pre-parse failed:', (e && e.message) || e));
       return;
     }
     if (m.kind !== 'event' || m.ns !== 'face') return;
