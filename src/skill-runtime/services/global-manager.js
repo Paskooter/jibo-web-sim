@@ -178,17 +178,25 @@ export class GlobalManagerService {
     const result = data.result;
     if (!result) return;
 
+    // Order matters here. The hub commonly returns BOTH a global-command intent
+    // (e.g. whatCanIDo / help) AND a concrete skill match (e.g.
+    // match.skillID='@be/friendly-tips', onRobot=true) — the hub has already
+    // chosen the skill to handle the global. If we broadcast as global first,
+    // the bundle's onGlobal fires but never launches a skill, so the orphan
+    // cloud SKILL_ACTION sits in CloudResponseRegistry and gets culled at 10s.
+    // Real source's GlobalManagerService.handleSkillLaunch routes any turn
+    // with a usable match.skillID as a skill (re)launch
+    // (GlobalManagerService.ts:143). Skill match takes priority; the global
+    // path is the FALLBACK for matchless turns (volume up, etc.).
     const intent = (result.nlu && result.nlu.intent) || '';
-    const globalCmd = resolveGlobalCommand(intent);
-    if (globalCmd) {
-      // Volume etc. — match isn't needed; onGlobal reads result.nlu.intent.
-      console.log('[global-manager] -> global', globalCmd);
-      this._broadcast({ status: 'OK', message: 'global', id: '', result: this._serializeResult(result), moreinfo: '' });
-      return;
-    }
-
     const skillID = resolveSkillID(result);
     if (!skillID) {
+      const globalCmd = resolveGlobalCommand(intent);
+      if (globalCmd) {
+        console.log('[global-manager] -> global', globalCmd);
+        this._broadcast({ status: 'OK', message: 'global', id: '', result: this._serializeResult(result), moreinfo: '' });
+        return;
+      }
       console.log('[global-manager] no skill match (intent=', intent, ') — dropping');
       // No skill match and not a global command — be's noGlobalMatch path
       // handles it locally. Nothing to push.
