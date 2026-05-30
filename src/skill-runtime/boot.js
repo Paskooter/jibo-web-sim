@@ -147,39 +147,56 @@ async function bootReal() {
     //    requires the cloud (Pegasus); HTTP goes via BusXHR's native pass-through.
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
       const text = m.text.trim();
-      // In-MIM hook: ActionData.UTTERANCE drives the same emitter — the active
-      // MIM's handleSpeech listener can match on raw text/intent for dialog
-      // prompts. We keep an utterance-shaped object for that path.
-      const utt = { intent: text, entities: {}, rules: [] };
+      // Routing decision: is a skill-owned Listen (MIM) currently waiting?
+      //   - Active Listen present → inject CLIENT_ASR via .update() into THAT
+      //     turn. The hub parses against the MIM's rules and returns the result
+      //     on the SAME WS the MIM is waiting on. The MIM advances.
+      //     (live-eye.connectCloud monkey-patches jetstream.startLocalTurn to
+      //     stash the active non-launch request at window.__activeListen.)
+      //   - No active Listen (idle) → fall back to a fresh skill-launch turn
+      //     with nluRules:['launch'] so the hub's IntentRouter can match a
+      //     skill match.
+      // Previously we did BOTH paths, which double-counted: the MIM listen
+      // timed out (SOS_TIMEOUT) while a side-channel "yes" landed on the
+      // global path and triggered "No global event found: YES" + 60s
+      // max-transaction-time orphan from the update_local_turn the bundle
+      // sends in response to mim.handleSpeech.emit.
       let inMim = false;
+      const active = (typeof window !== 'undefined' && window.__activeListen) || null;
+      const activeUsable = active && typeof active.update === 'function' && active.status !== 'CANCELED' && active.status !== 'COMPLETED';
+      if (activeUsable) {
+        try {
+          active.update(text);
+          console.log('[utterance]', JSON.stringify(text), '-> active listen update');
+          inMim = true;
+        } catch (e) { console.warn('[utterance] active listen update failed:', (e && e.message) || e); }
+      }
+      // ALSO fire the local mim.handleSpeech for any skill-side handler that
+      // wants the raw utterance (action-data UTTERANCE consumers); this is
+      // independent of the cloud parse so it's safe to run alongside.
       try {
         const mim = window.jibo && window.jibo.mim;
         if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function') {
-          mim.handleSpeech.emit(utt);
-          inMim = true;
+          mim.handleSpeech.emit({ intent: text, entities: {}, rules: [] });
         }
       } catch (e) { console.warn('[boot] handleSpeech forward:', e.message); }
-      try {
-        const js = window.jibo && window.jibo.jetstream;
-        if (js && typeof js.startLocalTurn === 'function') {
-          // Use CLIENT_ASR (raw text), NOT CLIENT_NLU. The hub's IntentRouter
-          // only matches when nluData.rules contains 'launch', and only the
-          // hub-side parser (API.ai / dialogflow) produces those rules. If we
-          // stuff the text into CLIENT_NLU.intent, the hub treats it as a
-          // pre-resolved intent name and the router returns match:null.
-          //
-          // 'launch' is the meta-rule the pegasus parser uses to union all
-          // skill-launch intents (parser/cli/build-rules.ts builds a single
-          // launch.fst out of every */launch.rule under rules_src/). Sending
-          // nluRules:['launch'] makes the parser tag matched intents with
-          // 'launch' in the returned NLU.rules, which is exactly what
-          // IntentRouter.getSkillIDFromNLU and be/be's SharedGlobalEvents check.
-          js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
-            .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
-            .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
-        }
-        console.log('[utterance]', JSON.stringify(text), 'in-mim=', inMim);
-      } catch (e) { console.warn('[boot] startLocalTurn forward:', e.message); }
+      if (!inMim) {
+        try {
+          const js = window.jibo && window.jibo.jetstream;
+          if (js && typeof js.startLocalTurn === 'function') {
+            // 'launch' is the meta-rule the pegasus parser uses to union all
+            // skill-launch intents (parser/cli/build-rules.ts builds a single
+            // launch.fst from every */launch.rule). Sending nluRules:['launch']
+            // makes the matched intent come back with NLU.rules=['launch'],
+            // which is what IntentRouter.getSkillIDFromNLU + be's
+            // SharedGlobalEvents check.
+            js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
+              .then(() => console.log('[utterance] startLocalTurn ok:', JSON.stringify(text)))
+              .catch((e) => console.warn('[utterance] startLocalTurn failed:', (e && e.message) || e));
+          }
+          console.log('[utterance]', JSON.stringify(text), '-> startLocalTurn (no active listen)');
+        } catch (e) { console.warn('[boot] startLocalTurn forward:', e.message); }
+      }
       return;
     }
     if (m.kind !== 'event' || m.ns !== 'face') return;

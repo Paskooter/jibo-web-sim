@@ -411,6 +411,43 @@ export function connectCloud(requireFn) {
     // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
     const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
     if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
+
+    // Track the active MIM Listen request. When a skill (e.g. @be/friendly-tips
+    // in its `wanna see more?` MIM) opens a Listen with non-launch rules, the
+    // cloud is waiting on THAT WS to receive the ASR/NLU for the answer. If our
+    // typed-chat path opens a separate startLocalTurn for "sure", the MIM's
+    // listen times out (SOS_TIMEOUT) and the answer lands on a new, ignored
+    // turn. By stashing the most-recent in-flight LocalTurnRequest on
+    // window.__activeListen, boot.js can call .update(text) to inject
+    // CLIENT_ASR into the existing turn instead — the cloud parses against
+    // the MIM's rules and returns the result on the same WS the MIM is
+    // waiting on. Skip turns whose only rule is `launch` (those are the
+    // out-of-mim fallback we ourselves start; updating them would loop).
+    try {
+      const origStart = api.startLocalTurn;
+      if (typeof origStart === 'function' && !api.__activeListenTracked) {
+        api.__activeListenTracked = true;
+        api.startLocalTurn = function patchedStartLocalTurn(opts) {
+          const req = origStart.apply(this, arguments);
+          try {
+            const rules = (opts && (opts.nluRules || (opts.listen && opts.listen.rules))) || [];
+            const isLaunchOnly = Array.isArray(rules) && rules.length === 1 && rules[0] === 'launch';
+            if (req && !isLaunchOnly) {
+              window.__activeListen = req;
+              const clear = () => { if (window.__activeListen === req) window.__activeListen = null; };
+              if (req.promise && typeof req.promise.then === 'function') {
+                req.promise.then(clear, clear);
+              } else if (req.events) {
+                ['turnResult', 'completed', 'failed', 'closed'].forEach((n) => {
+                  try { if (req.events[n] && typeof req.events[n].on === 'function') req.events[n].on(clear); } catch (_) { /* */ } });
+              }
+            }
+          } catch (_) { /* */ }
+          return req;
+        };
+      }
+    } catch (e) { console.warn('[cloud] activeListen track:', e.message); }
+
     console.log('[cloud] connecting jetstream to', `${server}:9000`);
     Promise.resolve(api.init({ hostname: server, port: 9000 }))
       .then(() => console.log('[cloud] jetstream connected to', `${server}:9000`))

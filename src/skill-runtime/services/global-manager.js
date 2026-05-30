@@ -29,12 +29,17 @@
 //   3. domain heuristic ("clock" → "@be/clock") — a tiny lookup of @be/*
 //      skills that the cloud commonly tags via entity domain.
 
-// Intents the runtime treats as global voice commands (not skill switches).
-// Mirrors jibo/jibo-common-types.GlobalCommand — anything matching here goes
-// through onGlobal instead of onSkillRelaunch.
+// Intents the bundle treats as global voice commands. EXACTLY the eight events
+// in jibo.js:19519 `this.voiceEvents = [help, voiceStop, sleep, pause,
+// whatCanIDo, holdOn, volume, overHere]`. Mapped to the uppercase names jibo's
+// onGlobal switch uses (jibo.js:19592+). YES/NO/REPEAT/THANKS/CANCEL are NOT
+// voice events at the SSM level — they're MIM-level intents handled by the
+// active skill's Listen rules. Broadcasting them as 'global' triggers the
+// bundle's onGlobal "No global event found: YES" error and starves the MIM
+// of the response it's waiting for.
 const GLOBAL_COMMANDS = new Set([
-  'STOP', 'SLEEP', 'WAKE', 'WHATCANIDO', 'HELP', 'CANCEL',
-  'HOLDON', 'OVERHERE', 'YES', 'NO', 'REPEAT', 'THANKS',
+  'STOP', 'SLEEP', 'PAUSE', 'WHATCANIDO', 'HELP',
+  'HOLDON', 'OVERHERE', 'VOLUME',
 ]);
 
 // Map dialogflow `entities.domain` strings to @be/* skill IDs — a last-resort
