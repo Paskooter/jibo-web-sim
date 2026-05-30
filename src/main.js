@@ -27,7 +27,11 @@ import { createNotificationsService } from './bridge/services/notifications-serv
 import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
-const SKILLS = ['/skills/hello-world', '/skills/fortune-teller', '/external-skills/jibo-be'];
+// Order matters: the picker shows entries in this order, and applySkill() at
+// boot picks the first one whose manifest loads successfully. jibo-be is first
+// so it boots by default when present; the hand-written demo bundles are the
+// fallback (developing or sharing the sim without the be bundle checked out).
+const SKILLS = ['/external-skills/jibo-be', '/skills/hello-world', '/skills/fortune-teller'];
 let switchSkill = () => {};   // assigned once the runtime is up
 
 const viewportEl = document.getElementById('viewport');
@@ -75,8 +79,12 @@ serverInput.addEventListener('change', () => {
 });
 
 // Skill picker — populated from each bundle's manifest (display-name).
+// Tracks the first dir whose manifest loaded so the boot can default to a
+// present skill rather than blindly picking SKILLS[0] (which might be
+// jibo-be on a checkout that doesn't have /external-skills/jibo-be cloned).
 const skillPicker = document.getElementById('skill-picker');
-(async () => {
+let firstLoadedDir = null;
+const skillsReady = (async () => {
   for (const dir of SKILLS) {
     try {
       const m = await loadSkillManifest(dir);
@@ -84,6 +92,7 @@ const skillPicker = document.getElementById('skill-picker');
       opt.value = dir;
       opt.textContent = m.name;
       skillPicker.appendChild(opt);
+      if (!firstLoadedDir) firstLoadedDir = dir;
     } catch (err) { console.error('skill manifest load failed:', dir, err); }
   }
 })();
@@ -416,5 +425,7 @@ async function startSkillRuntime() {
     }
   }
   switchSkill = applySkill;
-  applySkill(SKILLS[0]);
+  // Wait for the picker to finish probing manifests, then pick the first
+  // one that actually loaded (defaults to jibo-be when present per SKILLS[0]).
+  skillsReady.then(() => applySkill(firstLoadedDir || SKILLS[0]));
 }
