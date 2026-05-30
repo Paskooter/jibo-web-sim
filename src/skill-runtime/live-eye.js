@@ -726,13 +726,33 @@ export function initOfflineServices(jibo, requireFn) {
         const path = animDBPath || defaultPath;
         console.log('[live-eye] animDB.init(', !!path ? path : '<empty>', ')');
         const r = orig(jiboArg, path, ...rest);
+        const installQueryHook = () => {
+          try {
+            if (jibo.animDB.__queryHooked) return;
+            const origQuery = jibo.animDB.query && jibo.animDB.query.bind(jibo.animDB);
+            if (!origQuery) return;
+            jibo.animDB.__queryHooked = true;
+            jibo.animDB.query = function patchedQuery(q) {
+              const r2 = origQuery(q);
+              try {
+                const n = (r2 && r2.matching && r2.matching.length) | 0;
+                const summary = JSON.stringify({ categories: q.categories, includeMeta: q.includeMeta, includeSomeMeta: q.includeSomeMeta, excludeMeta: q.excludeMeta });
+                console.log('[live-eye] animDB.query', summary, '-> matching=', n, n > 0 ? '(' + r2.matching.slice(0, 3).map((a) => a.name || (a.meta && a.meta.name)).join(',') + (n > 3 ? ',...' : '') + ')' : '');
+              } catch (_) { /* */ }
+              return r2;
+            };
+          } catch (_) { /* */ }
+        };
         if (r && typeof r.then === 'function') {
           r.then(() => {
             try {
               const n = jibo.animDB.getAnimationNames ? jibo.animDB.getAnimationNames().length : -1;
               console.log('[live-eye] animDB indexed animations:', n);
+              installQueryHook();
             } catch (_) { /* */ }
           }, (e) => console.warn('[live-eye] animDB.init failed:', e && e.message));
+        } else {
+          installQueryHook();
         }
         return r;
       };
