@@ -4,7 +4,9 @@
 // jibo-be's runtime expects a service registered under the name "global-manager"
 // (jibo.js ServicesPlugin.serviceInit['global-manager']). On init it opens a
 // WebSocket to that record's host:port path /globals and listens for messages
-// of shape `{status:'OK', message:<eventName>, result:<ListenResult JSON>}`.
+// of shape `{status:'OK', message:<eventName>, id:'', result:<ListenResult JSON>,
+// moreinfo:''}` — the same envelope GlobalManagerService.ts:377-386
+// (returnType()) wraps every broadcast in.
 // The four message types it understands map to GlobalEvents handlers:
 //   - 'skill-relaunch'        → onSkillRelaunch  → jibo.globalEvents.skillRelaunch
 //                               → be (index.js)  → Be.redirect(<match.skillID>)
@@ -181,7 +183,7 @@ export class GlobalManagerService {
     if (globalCmd) {
       // Volume etc. — match isn't needed; onGlobal reads result.nlu.intent.
       console.log('[global-manager] -> global', globalCmd);
-      this._broadcast({ status: 'OK', message: 'global', result: this._serializeResult(result) });
+      this._broadcast({ status: 'OK', message: 'global', id: '', result: this._serializeResult(result), moreinfo: '' });
       return;
     }
 
@@ -235,7 +237,7 @@ export class GlobalManagerService {
         } else {
           console.warn('[global-manager] jibo.globalEvents.skillRelaunch not available; falling back to /globals');
           const enriched = this._serializeResult(directResult);
-          this._broadcast({ status: 'OK', message: 'skill-relaunch', result: enriched });
+          this._broadcast({ status: 'OK', message: 'skill-relaunch', id: '', result: enriched, moreinfo: '' });
         }
       } catch (e) { console.warn('[global-manager] direct skillRelaunch failed:', e && e.message); }
       return;
@@ -250,7 +252,12 @@ export class GlobalManagerService {
     if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
     if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = rawMatchID;
     console.log('[global-manager] -> skill-relaunch', rawMatchID, '(clients=' + this.clients.size + ')');
-    this._broadcast({ status: 'OK', message: 'skill-relaunch', result: enriched });
+    // Source envelope (GlobalManagerService.ts:377-386) is
+    // {status, message:<tag>, id, result, moreinfo}. jibo.GlobalEvents.onMessage
+    // (jibo.js:19580) only reads .status + .message + .result, but match the
+    // full shape so anything that re-broadcasts/proxies our payload sees an
+    // identical envelope to what the real SSM emits.
+    this._broadcast({ status: 'OK', message: 'skill-relaunch', id: '', result: enriched, moreinfo: '' });
   }
 
   // ListenResult instances expose getters (text, intent) — flatten to plain
