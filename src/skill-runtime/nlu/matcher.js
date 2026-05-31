@@ -47,7 +47,11 @@ function _norm(s) { return String(s).toLowerCase().replace(/['’]/g, ''); }
 
 // Apply tag specs (from a node's .tags) against a sub-match's subFields,
 // producing entity updates for the parent. `lit` tags drop their value as-is;
-// `subfield` tags read SubRule._field from `subFields`.
+// `subfield` tags read SubRule._field from `subFields`. `op` is 'set' (the
+// `=` operator, overwriting) or 'append' (the `+=` operator, concatenating
+// to whatever the same key already holds in this scope). Append is how the
+// chitchat rule composes mimIds: `{_mimId='RA_JBO_'}{_mimId += ENT._entity}`
+// → `RA_JBO_TellAJoke`.
 function applyTags(tags, prevEntities, prevSubFields, subFields) {
   if (!tags || tags.length === 0) return { entities: prevEntities, subFields: prevSubFields };
   const ent = freshEnts(prevEntities);
@@ -59,8 +63,13 @@ function applyTags(tags, prevEntities, prevSubFields, subFields) {
     if (val === undefined) continue;
     // Keys starting with `_` are private to the rule — they propagate to the
     // parent via subFields, NOT into the public entities map.
-    if (tag.key.startsWith('_')) sub[tag.key] = val;
-    else ent[tag.key] = val;
+    const target = tag.key.startsWith('_') ? sub : ent;
+    if (tag.op === 'append') {
+      const prev = target[tag.key];
+      target[tag.key] = (prev === undefined ? '' : String(prev)) + String(val);
+    } else {
+      target[tag.key] = val;
+    }
   }
   return { entities: ent, subFields: sub };
 }

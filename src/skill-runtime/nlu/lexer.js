@@ -49,7 +49,8 @@ export function lex(source) {
   // (for escaped `\@`), or an apostrophe (for words starting with quotes
   // in escape sequences — rare).
   function isWordStart(ch) { return /[A-Za-z0-9_\\]/.test(ch); }
-  function isWordChar(ch) { return /[A-Za-z0-9_'\\@/.-]/.test(ch); }
+  // `&` lets `r&b` tokenize as one literal (chitchat radio-station rule).
+  function isWordChar(ch) { return /[A-Za-z0-9_'\\@/.&-]/.test(ch); }
 
   while (i < N) {
     const ch = source[i];
@@ -174,7 +175,13 @@ export function lex(source) {
       continue;
     }
 
-    // `+` is FST concatenation in weighted-form (equivalent to a sequence).
+    // `+=` is the tag-append operator (`{_mimId += Sub._entity}` —
+    // concatenate the value rather than overwrite). Used by the on-robot
+    // chitchat rule to compose mimIds: `{_mimId='RA_JBO_'}{_mimId += ENT._entity}`
+    // → `RA_JBO_TellAJoke`. Without this, the second tag overwrites the first
+    // and chitchat's scripted-response set lookup misses on the bare entity name.
+    if (ch === '+' && source[i + 1] === '=') { advance(2); push('PLUSEQ', '+='); continue; }
+    // Bare `+` is FST concatenation in weighted-form (equivalent to a sequence).
     // Drop standalone occurrences; sequences naturally form by adjacency.
     if (ch === '+') { advance(); continue; }
 

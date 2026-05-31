@@ -1,4 +1,4 @@
-TopRule = ($* ($GO_TO | $STOP | $SHUT_UP | $SLEEP | $NOT_YOU) $* {skill='\@be/idle'});
+TopRule = ($* ($GO_TO | $STOP | $SHUT_UP | $SLEEP | $NOT_YOU) $* {domain='idle'}{skill='\@be/idle'});
 
 GO_TO = ?$V_OPEN idle;
 

@@ -137,25 +137,30 @@ export function parse(source) {
   // `{key=value}{key2=value2}` — one tag-block per call, returns the list
   // of `{key,...}` specs (one block can hold multiple key=value pairs in
   // some dialects; the on-robot rules consistently use one pair per block).
+  // `op` distinguishes `=` (set) from `+=` (append). Append concatenates the
+  // value onto whatever the key already holds in the same scope (private
+  // subFields or public entities), matching jibo-nlu's tag semantics.
   function parseTagBlock() {
     eat('LBRACE');
     const tags = [];
     while (peek().kind !== 'RBRACE') {
       const key = eat('ID').value;
-      eat('EQ');
+      let op = 'set';
+      if (peek().kind === 'PLUSEQ') { pos += 1; op = 'append'; }
+      else eat('EQ');
       // Value: STRING ('quoted'), or `SubRule._field` reference (single
       // ID token with embedded `.`, the lexer doesn't break on dots — we
       // split here). Tolerate either form.
       if (peek().kind === 'STRING') {
-        tags.push({ key, kind: 'lit', value: eat('STRING').value });
+        tags.push({ key, op, kind: 'lit', value: eat('STRING').value });
       } else if (peek().kind === 'ID') {
         const raw = eat('ID').value;
         const dot = raw.indexOf('.');
         if (dot >= 0) {
-          tags.push({ key, kind: 'subfield', subRule: raw.slice(0, dot), subField: raw.slice(dot + 1) });
+          tags.push({ key, op, kind: 'subfield', subRule: raw.slice(0, dot), subField: raw.slice(dot + 1) });
         } else {
           // Bare identifier as a value — treat as a literal string (rare).
-          tags.push({ key, kind: 'lit', value: raw });
+          tags.push({ key, op, kind: 'lit', value: raw });
         }
       } else {
         throw new Error(`parser: tag value expected at ${peek().line}:${peek().col}`);
