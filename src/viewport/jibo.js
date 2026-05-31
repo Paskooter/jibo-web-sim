@@ -113,28 +113,39 @@ export function createJiboRig(scene) {
   }
 
   // --- Writhe mode (joke) ----------------------------------------------------
-  // Inserts N extra body segments between the middle and top sections, each
-  // a clone of the entire middleSection subtree (meshes + sub-frames),
-  // writhing on its own per-frame sinusoid with a phase offset so the whole
-  // stack wriggles like a worm. The face stays put on top, looking around
-  // horrifyingly while the body undulates.
-  // Trigger from the browser console: JIBO_WRITHE(10).
+  // Inserts N extra body "vertebrae" between the bottom and middle sections.
+  // Each vertebra is a clone of the bottomSection subtree MINUS the
+  // middleSection subtree — so the meaty body-mass mesh (not just the thin
+  // connector ring at the top of the middle) gets copied. Each vertebra is
+  // stacked at the offset where the middleSection originally attached to the
+  // bottom, so they connect rather than float as disjoint rings. The original
+  // middleSection (and everything above — head/eye/screen) sits on top of
+  // the last vertebra and continues to function as normal.
+  //
+  // Each vertebra writhes on its own sinusoidal yaw with a phase offset
+  // propagating up the body so the whole chain wriggles like a worm.
+  //
+  // Trigger from the browser console:
+  //   JIBO_WRITHE(10)         // 10 extra vertebrae, default spacing
+  //   JIBO_WRITHE(15, 1.5)    // 15 vertebrae, 1.5x spacing (more stretched)
+  //   JIBO_WRITHE(20, 0.8)    // 20 vertebrae, tighter packing
   const writheTickFns = [];
-  function writhe(n) {
+  function writhe(n, spacing) {
     const segments = Math.max(0, n | 0);
+    const stretch = Number.isFinite(spacing) && spacing > 0 ? spacing : 1.0;
+    const bottomCtl = controls['bottomSection_r'];
     const middleCtl = controls['middleSection_r'];
     const topCtl = controls['topSection_r'];
-    if (!middleCtl || !topCtl) {
+    if (!bottomCtl || !middleCtl || !topCtl) {
       console.warn('jibo: writhe — rig not ready yet, try again after the model loads');
       return;
     }
+    const bottomFrame = bottomCtl.frame;
     const middleFrame = middleCtl.frame;
-    const topFrame = topCtl.frame;
 
     // Recursive shallow-clone that prunes a specific subtree by node identity.
-    // Used to copy middleSection's whole subtree of meshes + sub-frames while
-    // skipping topSection's subtree — that gets reparented to the end of the
-    // chain instead, so the face/eye stays where the user expects (on top).
+    // The cloned subtree shares geometry + materials with the original, so
+    // adding 20 vertebrae costs almost nothing.
     function cloneSubtreeExcept(node, skipNode) {
       if (node === skipNode) return null;
       const clone = node.clone(false);
@@ -145,37 +156,39 @@ export function createJiboRig(scene) {
       return clone;
     }
 
-    // Detach top off the original middle — it'll re-attach at the end of the
-    // new chain after the segments are stacked.
-    middleFrame.remove(topFrame);
+    // Reparent middleFrame out of bottomFrame so we can splice the new chain
+    // in between. The original local offset is what each new vertebra will
+    // use to stack — that's the bottomSection → middleSection joint offset
+    // in bottomFrame's local space.
+    const stackOffset = middleFrame.position.clone().multiplyScalar(stretch);
+    bottomFrame.remove(middleFrame);
 
-    let parent = middleFrame;
+    let parent = bottomFrame;
     for (let i = 0; i < segments; i += 1) {
-      const seg = cloneSubtreeExcept(middleFrame, topFrame);
+      const seg = cloneSubtreeExcept(bottomFrame, middleFrame);
       seg.name = `writhe_seg_${i}`;
-      // Stack each new segment at the same vertical offset that topSection
-      // has from middleSection, so the chain extends straight up the body.
-      seg.position.copy(topFrame.position);
-      seg.quaternion.copy(middleCtl.initialRotation);
+      seg.position.copy(stackOffset);
+      seg.quaternion.copy(bottomCtl.initialRotation);
       parent.add(seg);
       parent = seg;
 
-      // Per-segment writhing oscillation. Phase offset propagates the wave
-      // up the body so the segments don't all swing in unison. Amplitude is
-      // large on purpose — the joke is the horror.
+      // Per-vertebra writhing — yaws around the middleSection axis (so each
+      // vertebra writhes side-to-side, propagating the wave up the spine).
+      // Phase offset 0.65 rad per segment, freq 0.45 Hz, amplitude 0.32 rad.
       const phase = i * 0.65;
       const freq = 0.45;
       const amp = 0.32;
       writheTickFns.push((tSec) => {
         const angle = Math.sin(tSec * 2 * Math.PI * freq + phase) * amp;
         const spin = new THREE.Quaternion().setFromAxisAngle(middleCtl.axis, angle);
-        seg.quaternion.multiplyQuaternions(middleCtl.initialRotation, spin);
+        seg.quaternion.multiplyQuaternions(bottomCtl.initialRotation, spin);
       });
     }
 
-    // Face goes back on at the top of the new stack.
-    parent.add(topFrame);
-    console.log(`[jibo] writhing — added ${segments} extra segment${segments === 1 ? '' : 's'} (reload to undo)`);
+    // The original middleSection (and everything above — head/eye/screen)
+    // sits on top of the last vertebra.
+    parent.add(middleFrame);
+    console.log(`[jibo] writhing — added ${segments} extra vertebr${segments === 1 ? 'a' : 'ae'} at ${stretch}x spacing (reload to undo)`);
   }
   function tickWrithe(tSec) {
     for (const fn of writheTickFns) fn(tSec);

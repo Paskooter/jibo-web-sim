@@ -148,11 +148,13 @@ viewport.rig.ready
   .then(() => {
     statusEl.textContent = `three.js r${viewport.threeRevision} · click Start`;
     showStartGate();
-    // Joke mode: from the console, JIBO_WRITHE(n) inserts n extra body
-    // segments between the middle and top sections, each writhing on its
-    // own sinusoid. Reload to undo. JIBO_WRITHE() with no arg defaults to
-    // 10 segments — a satisfyingly horrifying baseline.
-    window.JIBO_WRITHE = (n = 10) => viewport.rig.writhe(n);
+    // Joke mode: from the console, JIBO_WRITHE(n, spacing?) inserts n extra
+    // body vertebrae between the bottom and middle sections, each writhing
+    // on its own sinusoid. Reload to undo. JIBO_WRITHE() with no arg
+    // defaults to 10 segments. The optional spacing multiplier (default 1.0)
+    // controls how far apart vertebrae are stacked — try 1.5 for a longer
+    // worm or 0.8 for tighter packing.
+    window.JIBO_WRITHE = (n = 10, spacing = 1.0) => viewport.rig.writhe(n, spacing);
   })
   .catch((err) => {
     console.error('Jibo model load failed:', err);
