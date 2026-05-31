@@ -1,11 +1,11 @@
 // Hello World — bundle entry (package.json "main"; loaded by index.html via the
 // platform's jibo runtime). `jibo` is a global, as on a real robot.
 //
-// A hand-written equivalent of what jibo-cli's package-generator would scaffold
-// (behavior-template). The original drives behavior via jibo.flow.run + .bt/.flow
-// files; those subsystems aren't implemented in the web sim yet, so this skill
-// uses the public jibo.* services directly: init, face, tts, asr, nlu, animate —
-// the full Chat -> ASR -> NLU -> TTS loop, gesturing while it speaks.
+// A hand-written demo bundle. The standard behavior template drives logic
+// via jibo.flow.run + .bt/.flow files; those subsystems aren't implemented
+// in the web sim yet, so this skill uses the public jibo.* services
+// directly: init, face, tts, asr, nlu, animate — the full Chat -> ASR ->
+// NLU -> TTS loop, gesturing while it speaks.
 
 // NLU rule: a few intents Jibo can recognize from typed/"spoken" input.
 var CHAT_RULE = {

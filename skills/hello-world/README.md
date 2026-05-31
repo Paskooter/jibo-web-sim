@@ -1,8 +1,8 @@
 # Hello World — Jibo web-sim skill
 
-A hand-written Jibo skill bundle, the web-sim equivalent of what
-`jibo-cli`'s package generator scaffolds (`behavior-template`). It's loaded
-end-to-end from its manifest by the simulator's skill loader.
+A hand-written Jibo skill bundle, structured the same way a standard
+behavior-template package would be. It's loaded end-to-end from its
+manifest by the simulator's skill loader.
 
 ## Layout
 
