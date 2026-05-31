@@ -621,7 +621,17 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     // set so cancellation can stop those audios via the host 'stop-sound' bridge.
     startDofPlayback(options, dur, () => stopped, events, arbiterInstance);
   };
-  if (play) startPlayback(requestor);
+  // For createAndPlayAnimation, defer the initial play to a macrotask so the
+  // caller has time to assign anim.instance = Proxy (which subscribes
+  // KeysAnimation.onPlayTimeline / onPlayAudio to our events). The caller
+  // does that in the microtask after `await expression.createAndPlayAnimation`
+  // resumes; firing events synchronously here would dispatch t=0 play-pixi /
+  // play-audio events BEFORE the subscribe, jibo-typed-events drops them
+  // silently (no buffering — jibo-typed-events.js:70-77), and the coin-flip /
+  // JiboJi TimelineLayer is never created. setTimeout(0) goes to the
+  // macrotask queue, which runs strictly after the microtask queue drains —
+  // so KeysAnimation.set instance has subscribed by the time we fire events.
+  if (play) setTimeout(() => startPlayback(requestor), 0);
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
     get(t, p) {
