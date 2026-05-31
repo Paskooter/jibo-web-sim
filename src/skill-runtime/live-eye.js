@@ -208,23 +208,59 @@ function sampleChannel(times, values, t) {
   return values[i - 1] + (values[i] - values[i - 1]) * a;
 }
 
-// Last body DOFs we actually posted to the host viewport. Initialized to 0
-// because the rig starts at neutral. Each tick of startDofPlayback's body
-// loop updates this so the NEXT animation can ease in from the pose the
-// rig is currently holding instead of snapping to its own t=0 values.
+// Per-body-DOF motion state — analogous to the real-robot
+// `PoseOffsetFilterWindup` that animation-utilities runs on each joint.
+// The animation provides per-frame TARGET values; the planner advances
+// `applied` toward `target` under an acceleration limit, preserving
+// velocity continuity across animation boundaries. This is what produces
+// smooth, natural transitions on a real robot — fast for small offsets,
+// longer for large jumps, never instantaneous.
 //
-// The real robot's expression service handles this via the DOFArbiter
-// (per-layer priorities + cross-layer blending); we don't run an arbiter,
-// so an in-process approach-blend at the head of each playback achieves
-// the same observable smoothness for the common case of "play one anim,
-// then another, then back to rest".
-const _lastBodyDofs = { bottomSection_r: 0, middleSection_r: 0, topSection_r: 0, led_r: 0, led_g: 0, led_b: 0 };
-const APPROACH_MS = 300;
-// Smoothstep ease (C¹ continuous, 0→1 over 0→1). Used to blend the rig's
-// current pose into a new animation's sampled values over APPROACH_MS so
-// the transition matches how a real robot accelerates into a motion
-// rather than teleporting to the start pose.
-function smoothstep(a) { return a * a * (3 - 2 * a); }
+// Default body accel = 3 rad/s² (LookatNodeRuntimeConfig in
+// animation-utilities.js:2370 — bottom 3, middle 2.5, top 3). The
+// source's LinearTransitionBuilder defaults to 1s fixed transition;
+// using accel limits scales transition duration with offset magnitude
+// (sqrt(2*offset/accel) for a stop-at-target trapezoid), which feels
+// more natural than a fixed time.
+const _bodyState = {
+  bottomSection_r: { applied: 0, vel: 0, accel: 3.0 },
+  middleSection_r: { applied: 0, vel: 0, accel: 2.5 },
+  topSection_r:    { applied: 0, vel: 0, accel: 3.0 },
+};
+// LED color channels — applied directly (no motion planner; color
+// transitions look weird if they coast past their target).
+const LED_CHANNELS = new Set(['led_r', 'led_g', 'led_b']);
+
+// AccelPlanner — trapezoidal motion planner; port of
+// animation-utilities/ifr-motion/base/AccelPlanner.computeWithFixedAccel.
+// Same algorithm src/viewport/lookat.js uses for the lookat joints.
+// Plans a trip of `pDelta` from velocity v0, decelerating to a stop at
+// the target, never exceeding `accel`. Returns null for degenerate cases.
+function planFixedAccel(v0, pDelta, accel) {
+  if (accel < 1e-10) return null;
+  let a = accel;
+  if ((v0 * Math.abs(v0)) / (2 * accel) > pDelta) a = -accel;
+  let tosqrt = 2 * v0 * v0 + 4 * a * pDelta;
+  if (tosqrt < 0) { if (tosqrt > -1e-10) tosqrt = 0; else return null; }
+  const root = Math.sqrt(tosqrt);
+  let t1 = (-2 * v0 + Math.sign(a) * root) / (2 * a);
+  let t2 = v0 / a + t1;
+  if (t1 < 0) { if (t1 > -1e-10) t1 = 0; else return null; }
+  if (t2 < 0) { if (t2 > -1e-10) t2 = 0; else return null; }
+  return { v0, a, t1, t2 };
+}
+function planDisplacement(p, t) {
+  let pos = 0;
+  if (t > 0) { const ta = Math.min(t, p.t1); pos += (p.v0 + (p.a * ta) / 2) * ta; t -= ta; }
+  if (t > 0) { const td = Math.min(t, p.t2); pos += (p.v0 + p.a * p.t1 - (p.a * td) / 2) * td; t -= td; }
+  return pos;
+}
+function planVelocity(p, t) {
+  let v = p.v0;
+  if (t > 0) { const ta = Math.min(t, p.t1); v += p.a * ta; t -= ta; }
+  if (t > 0) { const td = Math.min(t, p.t2); v -= p.a * td; }
+  return v;
+}
 
 // When the running animation's `events.audio.emit(payload)` fires (from
 // fireEventsUpTo in startDofPlayback), KeysAnimation's onPlayAudio
@@ -319,19 +355,19 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
   if (!window.__activeAnimDofs) window.__activeAnimDofs = null;
   const startMs = performance.now();
   const durSec = durMs / 1000;
-  const BODY_DOFS = new Set(['bottomSection_r', 'middleSection_r', 'topSection_r', 'led_r', 'led_g', 'led_b']);
-  // Snapshot the rig's current pose (= last body DOFs we posted) as the
-  // approach origin. The first APPROACH_MS of playback ease each body DOF
-  // from this origin → the animation's sampled value via smoothstep, so a
-  // non-zero channel[0] doesn't produce an instantaneous jolt. Eye/screen
-  // DOFs are NOT smoothed — they're already blended on the eye side every
-  // frame (driveEye mixes __activeAnimDofs into the idle pose) and a
-  // 300ms ramp would visibly lag fast saccades.
-  const approachOrigin = Object.assign({}, _lastBodyDofs);
+  let lastFrameMs = startMs;
+  const BODY_DOFS_PLANNED = Object.keys(_bodyState);   // bottom/middle/top sections
   const tick = () => {
     if (isStopped()) { window.__activeAnimDofs = null; return; }
-    const elapsedSec = (performance.now() - startMs) / 1000;
+    const nowMs = performance.now();
+    const elapsedSec = (nowMs - startMs) / 1000;
     const t = Math.min(elapsedSec, durSec);
+    // Per-frame dt for the motion planner. Cap at 50ms — large tab-blur
+    // gaps shouldn't let the rig fly to the target in one giant leap.
+    let dt = (nowMs - lastFrameMs) / 1000;
+    if (dt > 0.05) dt = 0.05;
+    lastFrameMs = nowMs;
+
     const sampled = {};
     for (const ch of channels) {
       try {
@@ -340,26 +376,37 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
         sampled[name] = sampleChannel(ch.times || [], ch.values || [], t);
       } catch (_) { /* malformed channel */ }
     }
-    // Split into body (post to host) vs eye/screen (apply locally via driveEye).
+
+    // BODY DOFs go through the acceleration-limited planner — the same
+    // PoseOffsetFilter behavior the real expression service runs. Each
+    // joint integrates `applied` toward the animation's sampled TARGET
+    // under its acceleration limit, preserving velocity continuity
+    // across animation boundaries. For DOFs the animation doesn't
+    // define, the target stays at the current applied value (the rig
+    // holds its pose for that joint).
     const bodyDofs = {};
     let hasBody = false;
-    for (const k of Object.keys(sampled)) {
-      if (BODY_DOFS.has(k)) { bodyDofs[k] = sampled[k]; hasBody = true; }
-    }
-    // Ease-in: during the first APPROACH_MS, blend approachOrigin → sampled.
-    const elapsedMs = performance.now() - startMs;
-    if (hasBody && elapsedMs < APPROACH_MS) {
-      const e = smoothstep(elapsedMs / APPROACH_MS);
-      for (const k of Object.keys(bodyDofs)) {
-        const from = (approachOrigin[k] != null) ? approachOrigin[k] : 0;
-        bodyDofs[k] = from + (bodyDofs[k] - from) * e;
+    for (const name of BODY_DOFS_PLANNED) {
+      const state = _bodyState[name];
+      const target = (name in sampled) ? sampled[name] : state.applied;
+      if (dt > 0) {
+        const plan = planFixedAccel(state.vel, target - state.applied, state.accel);
+        if (plan) {
+          state.applied += planDisplacement(plan, dt);
+          state.vel      = planVelocity(plan, dt);
+        } else {
+          // Degenerate plan (target reached, zero delta) — hold.
+          state.vel = 0;
+        }
       }
+      bodyDofs[name] = state.applied;
+      hasBody = true;
     }
+    // LEDs aren't motion — apply the sampled value directly so animated
+    // color sweeps render crisply (no acceleration limit on hue).
+    for (const k of LED_CHANNELS) if (k in sampled) { bodyDofs[k] = sampled[k]; hasBody = true; }
+
     if (hasBody) {
-      // Remember what we actually posted so the next animation's
-      // approachOrigin reflects the rig's current pose (mid-blend or
-      // post-blend, doesn't matter — what matters is continuity).
-      for (const k of Object.keys(bodyDofs)) _lastBodyDofs[k] = bodyDofs[k];
       try { window.parent.postMessage({ __jibo: true, kind: 'dofs', dofs: bodyDofs }, '*'); } catch (_) { /* no parent */ }
     }
     // The eye DOFs are mixed into driveEye's per-frame frame so motion stays
@@ -368,7 +415,13 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
     // Fire any timed events whose time has now elapsed (audio cues etc.)
     fireEventsUpTo(t);
     if (t < durSec) requestAnimationFrame(tick);
-    else window.__activeAnimDofs = null;
+    else {
+      // Animation ended — KEEP _bodyState in place. The next animation
+      // (or idle pose) reads applied/vel from where we left off so
+      // motion is continuous across boundaries with no separate ease-in
+      // pass needed.
+      window.__activeAnimDofs = null;
+    }
   };
   requestAnimationFrame(tick);
 }
