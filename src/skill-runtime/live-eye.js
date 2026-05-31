@@ -226,6 +226,15 @@ const APPROACH_MS = 300;
 // rather than teleporting to the start pose.
 function smoothstep(a) { return a * a * (3 - 2 * a); }
 
+// When the running animation's `events.audio.emit(payload)` fires (from
+// fireEventsUpTo in startDofPlayback), KeysAnimation's onPlayAudio
+// listener runs synchronously and calls Sound.play(), whose patched
+// version posts a 'play-sound' to the host. We need to associate the
+// host-side audio id with the OWNING animation so a cancel/preempt can
+// also stop the audio. Set this right before emitting, clear right
+// after — Sound.play (further down this file) reads it.
+let _currentAudioOwner = null;
+
 // Drive both the body rig (via window.parent.postMessage 'dofs') and the live
 // eye (jibo.face.eye.display) from animation channel data over `durMs`. Stops
 // when isStopped() returns true. Body DOFs ('*Section_r', 'led_*') go to the
@@ -235,7 +244,7 @@ function smoothstep(a) { return a * a * (3 - 2 * a); }
 // clock crosses each event's time so KeysAnimation.onPlayAudio (subscribed to
 // events.audio) triggers Sound.play() at the right beat — without it the
 // dance plays visually but is silent.
-function startDofPlayback(options, durMs, isStopped, events) {
+function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
   const data = options && options.data;
   const channels = (data && data.content && Array.isArray(data.content.channels)) ? data.content.channels : null;
   // Sorted event queue; each entry tracks if it's been fired.
@@ -253,8 +262,14 @@ function startDofPlayback(options, durMs, isStopped, events) {
         //   play-audio  -> events.audio  (KeysAnimation.onPlayAudio -> Sound.play)
         //   play-pixi   -> events.pixi   (PIXI timeline overlay)
         //   HOLD_SAFE   -> events.holdSafe
+        // Tag the audio owner around the emit so the Sound.play patch can
+        // attribute the resulting host-side audio id back to this animation
+        // for cancel/preempt cleanup. play-pixi / HOLD_SAFE don't need this.
         if (ev.eventName === 'play-audio' && events.audio && events.audio.emit) {
-          events.audio.emit(ev.payload || {});
+          const prev = _currentAudioOwner;
+          _currentAudioOwner = audioOwner || null;
+          try { events.audio.emit(ev.payload || {}); }
+          finally { _currentAudioOwner = prev; }
         } else if (ev.eventName === 'play-pixi' && events.pixi && events.pixi.emit) {
           events.pixi.emit(ev.payload || {});
         } else if (ev.eventName === 'HOLD_SAFE' && events.holdSafe && events.holdSafe.emit) {
@@ -267,6 +282,7 @@ function startDofPlayback(options, durMs, isStopped, events) {
   };
   // Fire any events at t=0 immediately so an opening play-audio (music tracks
   // typically have AudioEvent at frame 0) starts the very first frame.
+  // fireEventsUpTo handles the audio-owner tagging internally.
   fireEventsUpTo(0);
   if (!channels || channels.length === 0) return;
   // Active animation DOFs are exposed to driveEye() so the eye-tick loop mixes
@@ -340,7 +356,12 @@ function makeAnimInstance(requireFn, play, options, requestor) {
   let cancelled = false;
   let raf = 0;
   // Stable identity for the arbiter — _instanceToDOF keys on this object.
-  const arbiterInstance = {};
+  // _audioIds tracks every host-side audio id this animation triggered (via
+  // its events.audio.emit → KeysAnimation.onPlayAudio → Sound.play patch).
+  // emitStopped walks this set and posts 'stop-sound' for each so a
+  // preempted dance doesn't leave its music playing while the new dance's
+  // music starts on top.
+  const arbiterInstance = { _audioIds: new Set() };
   // Channel DOF names — what this animation will try to claim. Computed
   // once so emitStopped/preemption can release them via the arbiter.
   const channelDofs = (() => {
@@ -358,6 +379,24 @@ function makeAnimInstance(requireFn, play, options, requestor) {
     // Release DOFs to the arbiter so the next animation can claim them
     // (matches DOFArbiter.ts:785 STOPPED/CANCELLED → TIMED_RELEASE).
     try { dofArbiter.releaseInstance(arbiterInstance); } catch (_) { /* arbiter not inited */ }
+    // Stop any host-side audio this animation started. Without this,
+    // preempting a dance leaves its music playing while the next
+    // dance starts its own — overlapping tracks. The host's stop-sound
+    // handler pauses the Audio element and emits sound-done so any
+    // pending iframe-side fin() can resolve cleanly. Only cancellation
+    // stops audio mid-stream; natural completion (reason undefined) lets
+    // the audio finish on its own — it was timed to the animation length.
+    if (reason === 'cancelled' && arbiterInstance._audioIds.size > 0) {
+      const ids = Array.from(arbiterInstance._audioIds);
+      arbiterInstance._audioIds.clear();
+      try {
+        for (const id of ids) {
+          window.parent.postMessage({ __jibo: true, kind: 'stop-sound', id }, '*');
+        }
+      } catch (_) { /* no parent */ }
+    } else {
+      arbiterInstance._audioIds.clear();
+    }
     try {
       if (reason === 'cancelled') {
         cancelled = true;
@@ -431,8 +470,10 @@ function makeAnimInstance(requireFn, play, options, requestor) {
     // times, values }] } } — value at time t is a piecewise-linear sample.
     // Pass the events container so the data's timed events (play-audio →
     // music playback via KeysAnimation.onPlayAudio → Sound.play → host audio)
-    // fire at the right beat.
-    startDofPlayback(options, dur, () => stopped, events);
+    // fire at the right beat. arbiterInstance is the audio-owner: any host-side
+    // audio id triggered from events.audio.emit gets tagged onto its _audioIds
+    // set so cancellation can stop those audios via the host 'stop-sound' bridge.
+    startDofPlayback(options, dur, () => stopped, events, arbiterInstance);
   };
   if (play) startPlayback(requestor);
   const fn = function () { return tolerant(); };
@@ -886,7 +927,13 @@ export function initOfflineServices(jibo, requireFn) {
             if (i >= 0) url = location.origin + (skillDir || '') + src.slice(i);
             else if (src.indexOf('/external-skills/') >= 0) url = location.origin + src.slice(src.indexOf('/external-skills/'));
             else if (src[0] === '/') url = location.origin + src;
+            // Attribute this audio to the currently-firing animation event
+            // (set by fireEventsUpTo around events.audio.emit) so that an
+            // arbiter preempt of that animation can also stop the audio.
+            const owner = _currentAudioOwner;
+            if (owner && owner._audioIds) owner._audioIds.add(id);
             const fin = () => {
+              if (owner && owner._audioIds) owner._audioIds.delete(id);
               if (callOpts.complete) { try { callOpts.complete(this); } catch (_) { /* */ } }
             };
             window.__pendingSounds.set(id, fin);

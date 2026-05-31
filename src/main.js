@@ -172,6 +172,11 @@ async function startSkillRuntime() {
   // dodge the Chromium GC-cancels-speech bug.
   const synth = window.speechSynthesis;
   const liveUtters = new Set();
+  // id (from iframe's play-sound) -> Audio element currently playing in
+  // the host. Lets 'stop-sound' (sent on animation cancel/preempt) find
+  // and pause the right element; without this, a preempted dance's music
+  // kept playing alongside the next dance's music.
+  const liveSounds = new Map();
   let speechChecked = false;
   if (synth && synth.getVoices().length === 0 && typeof synth.addEventListener === 'function') {
     synth.addEventListener('voiceschanged', () => {}); // nudge async voice load
@@ -211,11 +216,19 @@ async function startSkillRuntime() {
       // activation), so any sound it tries to play through Web Audio is
       // silent. Play it in the host window, where the Start Jibo click is
       // the user activation. m.src is already a same-origin HTTP URL.
+      //
+      // Track the Audio element under m.id so 'stop-sound' (sent from the
+      // iframe when its owning animation is cancelled — e.g. a higher-
+      // priority dance preempts the current one) can pause it. Without
+      // tracking, the cancelled dance's music keeps playing while the
+      // next dance starts ITS music, producing overlapping tracks.
       try {
         const audio = new Audio(m.src);
         if (typeof m.volume === 'number') audio.volume = Math.max(0, Math.min(1, m.volume));
         if (m.loop) audio.loop = true;
+        liveSounds.set(m.id, audio);
         const fin = () => {
+          liveSounds.delete(m.id);
           try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (_) { /* gone */ }
         };
         audio.addEventListener('ended', fin, { once: true });
@@ -223,6 +236,17 @@ async function startSkillRuntime() {
         audio.play().catch(() => fin());
       } catch (_) {
         try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (__) { /* */ }
+      }
+    } else if (m.kind === 'stop-sound' && typeof m.id === 'number') {
+      // Cancel an in-flight host Audio. Iframe-side: when an animation is
+      // cancelled by the arbiter, it walks its tracked audio ids and posts
+      // 'stop-sound' for each. Pausing + clearing src releases the underlying
+      // media resource; sound-done lets the iframe drop the pending entry.
+      const a = liveSounds.get(m.id);
+      if (a) {
+        try { a.pause(); a.src = ''; } catch (_) { /* */ }
+        liveSounds.delete(m.id);
+        try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (_) { /* gone */ }
       }
     } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
       // jibo-be animation playback (expression.createAndPlayAnimation) — the
