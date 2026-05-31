@@ -1,5 +1,7 @@
 # jibo-web-sim
 
+![Jibo twerks on command](assets/screenshots/jibo-twerk.gif)
+
 A browser-only simulator for Jibo skill bundles. Loads a production skill
 bundle into a sandboxed iframe, talks to in-browser stand-ins for the
 on-device services, and (optionally) bridges out to a real cloud backend
@@ -131,6 +133,8 @@ assets/jibo-legacy/               body geom/skel/kin + texture for the rig
 ```
 
 ## What works
+
+![Asking for the time runs the clock skill end-to-end](assets/screenshots/jibo-time.gif)
 
 - Bundle boots clean; the on-device runtime loads, plugins init, face renders.
 - Local NLU with the full launch-rule DSL: alternation precedence,
