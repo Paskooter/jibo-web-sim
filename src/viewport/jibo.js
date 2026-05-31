@@ -114,9 +114,10 @@ export function createJiboRig(scene) {
 
   // --- Writhe mode (joke) ----------------------------------------------------
   // Inserts N extra body segments between the middle and top sections, each
-  // a clone of the middle mesh, each writhing on its own per-frame sinusoid
-  // with a phase offset so the whole stack wriggles like a worm. The face
-  // stays put on top, looking around horrifyingly while the body undulates.
+  // a clone of the entire middleSection subtree (meshes + sub-frames),
+  // writhing on its own per-frame sinusoid with a phase offset so the whole
+  // stack wriggles like a worm. The face stays put on top, looking around
+  // horrifyingly while the body undulates.
   // Trigger from the browser console: JIBO_WRITHE(10).
   const writheTickFns = [];
   function writhe(n) {
@@ -129,25 +130,33 @@ export function createJiboRig(scene) {
     }
     const middleFrame = middleCtl.frame;
     const topFrame = topCtl.frame;
-    // The meshes attached to middleSection (excluding any child SKELETON
-    // frames like topSection). Cloned per segment so each writhing chunk
-    // has its own mesh instance.
-    const knownFrames = new Set(Object.values(frameMap));
-    const middleMeshes = middleFrame.children.filter((c) => !knownFrames.has(c));
 
-    // Reparent topSection off the original middle — it'll re-attach at the
-    // end of the chain after the new segments are stacked.
+    // Recursive shallow-clone that prunes a specific subtree by node identity.
+    // Used to copy middleSection's whole subtree of meshes + sub-frames while
+    // skipping topSection's subtree — that gets reparented to the end of the
+    // chain instead, so the face/eye stays where the user expects (on top).
+    function cloneSubtreeExcept(node, skipNode) {
+      if (node === skipNode) return null;
+      const clone = node.clone(false);
+      for (const child of node.children) {
+        const cc = cloneSubtreeExcept(child, skipNode);
+        if (cc) clone.add(cc);
+      }
+      return clone;
+    }
+
+    // Detach top off the original middle — it'll re-attach at the end of the
+    // new chain after the segments are stacked.
     middleFrame.remove(topFrame);
 
     let parent = middleFrame;
     for (let i = 0; i < segments; i += 1) {
-      const seg = new THREE.Group();
+      const seg = cloneSubtreeExcept(middleFrame, topFrame);
       seg.name = `writhe_seg_${i}`;
-      // Same vertical offset as the topSection has from the middle, so each
-      // new segment stacks on top of the previous one along the body axis.
+      // Stack each new segment at the same vertical offset that topSection
+      // has from middleSection, so the chain extends straight up the body.
       seg.position.copy(topFrame.position);
       seg.quaternion.copy(middleCtl.initialRotation);
-      for (const m of middleMeshes) seg.add(m.clone());
       parent.add(seg);
       parent = seg;
 
