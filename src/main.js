@@ -248,6 +248,21 @@ async function startSkillRuntime() {
         liveSounds.delete(m.id);
         try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (_) { /* gone */ }
       }
+    } else if (m.kind === 'lookat-target' && m.target) {
+      // jibo-be skill is calling jibo.expression.acquireTarget({position}) or
+      // .lookAt(...). Drive the rig's Lookat solver (analytical per-joint IK
+      // with acceleration limits — same algorithm as animation-utilities'
+      // Lookat — see src/viewport/lookat.js) toward the world-space point.
+      // Body sections (bottom/middle/top) animate smoothly; the eye gets
+      // residual gaze for what the body mechanism can't physically reach.
+      beTarget = { x: m.target.x, y: m.target.y, z: m.target.z };
+      applyAttention();
+    } else if (m.kind === 'lookat-clear') {
+      // Skill released its lookAt handle (AcquireHandle.release(), or the
+      // returned-handle's owner finished). Clear the be-side attention; the
+      // lower-precedence lpsTarget (if any) takes over, else lookat goes idle.
+      beTarget = null;
+      applyAttention();
     } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
       // jibo-be animation playback (expression.createAndPlayAnimation) — the
       // skill-runtime samples the animation's channels per frame and posts the
@@ -381,10 +396,15 @@ async function startSkillRuntime() {
   lookat.calibrate();
   viewport.onFrame(lookat.update);
 
-  // Attention = a transient audio glance, else the persistent LPS target.
+  // Attention sources, highest precedence first:
+  //   - audioAttention: transient glance toward an audio event (~1s)
+  //   - beTarget:       jibo-be skill calling jibo.expression.acquireTarget
+  //                     (lookAt/awaitFace etc. in real-runtime mode)
+  //   - lpsTarget:      persistent target from SHIM-mode jibo.lps.target.set
   let lpsTarget = null;
   let audioAttention = null;
-  const applyAttention = () => lookat.setTarget(audioAttention || lpsTarget);
+  let beTarget = null;
+  const applyAttention = () => lookat.setTarget(audioAttention || beTarget || lpsTarget);
 
   setActiveTarget = (pt) => {
     lpsTarget = pt ? { x: pt.x, y: pt.y, z: pt.z } : null;

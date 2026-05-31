@@ -235,6 +235,35 @@ function smoothstep(a) { return a * a * (3 - 2 * a); }
 // after — Sound.play (further down this file) reads it.
 let _currentAudioOwner = null;
 
+// Animations whose body channels have ended (natural completion) but
+// whose host-side audio is still playing. A typical dance keyframe
+// emits play-audio at t=0 for a ~20s music track; the animation's body
+// channels are often only 3-5s. So when a SECOND dance arrives between
+// the body-end (~5s) and the music-end (~20s), the arbiter says
+// "DOFs are AVAILABLE" and lets the new dance play — but the previous
+// dance's music is still pumping audio in the host. The new dance
+// then starts ITS music → two overlapping tracks.
+//
+// Track each instance whose natural-completion left audio playing, and
+// when a NEW animation's startPlayback runs, drain this list: post
+// stop-sound for each tracked id so the lingering music is replaced
+// by the new dance's music instead of stacking on top of it.
+const _completedWithLingeringAudio = new Set();
+function _drainLingeringAudio() {
+  if (_completedWithLingeringAudio.size === 0) return;
+  for (const owner of _completedWithLingeringAudio) {
+    if (!owner._audioIds || owner._audioIds.size === 0) continue;
+    const ids = Array.from(owner._audioIds);
+    owner._audioIds.clear();
+    try {
+      for (const id of ids) {
+        window.parent.postMessage({ __jibo: true, kind: 'stop-sound', id }, '*');
+      }
+    } catch (_) { /* no parent */ }
+  }
+  _completedWithLingeringAudio.clear();
+}
+
 // Drive both the body rig (via window.parent.postMessage 'dofs') and the live
 // eye (jibo.face.eye.display) from animation channel data over `durMs`. Stops
 // when isStopped() returns true. Body DOFs ('*Section_r', 'led_*') go to the
@@ -394,6 +423,11 @@ function makeAnimInstance(requireFn, play, options, requestor) {
           window.parent.postMessage({ __jibo: true, kind: 'stop-sound', id }, '*');
         }
       } catch (_) { /* no parent */ }
+    } else if (arbiterInstance._audioIds.size > 0) {
+      // Natural completion BUT audio is still playing (music outlives
+      // a short body anim). Park this instance — the next startPlayback
+      // will preempt the lingering audio so two dances don't overlap.
+      _completedWithLingeringAudio.add(arbiterInstance);
     } else {
       arbiterInstance._audioIds.clear();
     }
@@ -454,6 +488,10 @@ function makeAnimInstance(requireFn, play, options, requestor) {
       console.log('[live-eye] anim REJECTED by arbiter (req=' + useReq + ', wanted ' + channelDofs.length + ' dofs)');
       return;
     }
+    // Preempt any lingering audio from previously-completed animations
+    // (their body channels finished but their audio is still playing —
+    // a new animation about to start its own audio takes precedence).
+    _drainLingeringAudio();
     started = true;
     const dataObj = options && options.data;
     const channels = (dataObj && dataObj.content && Array.isArray(dataObj.content.channels)) ? dataObj.content.channels : null;
@@ -503,16 +541,63 @@ function makeAnimInstance(requireFn, play, options, requestor) {
 
 // The expression-service RPC methods route through a RemoteClient that never
 // connects offline (UNIT_TESTS), so calls throw on `_client.send`. We drive the
-// eye locally instead, so replace those methods with resolving local no-ops and
-// make the events/feature surface tolerant — letting jibo-be's boot proceed.
-// createAnimation/createAndPlayAnimation return a real-enough AnimationInstance
-// (above) so the eye-animation path (KeysAnimation/jibo-anim-db) works.
+// eye locally instead. Methods listed here have no meaningful behavior in a
+// browser sim (cache eviction, LED hardware, robot indexing, etc.) so they
+// resolve to a tolerant proxy that satisfies any chained API calls. Methods
+// that DO drive observable behavior (acquireTarget/awaitFace/lookAt/centerRobot/
+// cleanup) get full implementations below the loop, not in this list.
 const EXPRESSION_METHODS = [
-  'destroyCaches', 'acquireTarget',
+  'destroyCaches',
   'setAttentionMode', 'pushAttentionMode', 'popAttentionMode', 'getAttentionMode',
-  'setLEDColor', 'awaitFace', 'centerRobot', 'cleanup', 'indexRobot', 'setSkillRoot',
-  'blink', 'doCenterRobotOnDisconnect', 'lookAt', 'subscribe', 'unsubscribe',
+  'setLEDColor', 'indexRobot', 'setSkillRoot',
+  'blink', 'doCenterRobotOnDisconnect', 'subscribe', 'unsubscribe',
 ];
+
+// Build a real AcquireHandle the source returns from acquireTarget/awaitFace.
+// Source (Expression.ts:245-265, AcquireHandle.ts): the SSM returns an object
+// with .instanceId; the client wraps it so callers can later .release() to
+// drop the target. We return a shape with .release() that posts lookat-clear
+// to the host. The proxy stays tolerant for any other property access so
+// skills doing `handle.someExtension()` don't crash.
+function makeAcquireHandle(onRelease) {
+  let released = false;
+  const release = () => {
+    if (released) return Promise.resolve();
+    released = true;
+    try { onRelease(); } catch (_) { /* */ }
+    return Promise.resolve();
+  };
+  const obj = { release, then: undefined };
+  return new Proxy(obj, {
+    get(t, p) {
+      if (p === 'release') return release;
+      if (p === 'released') return released;
+      if (p === 'then') return undefined;        // not a thenable
+      if (p === 'instanceId') return null;
+      return tolerant();
+    },
+  });
+}
+// Extract a world-space target from acquireTarget/lookAt options. The source
+// AcquireOptions accepts:
+//   - {position: {x,y,z}}  — direct world point
+//   - {entity: blackboardObj}  — track a moving entity (LPS face/sound source)
+// In our sim we don't track entities (no LPS visual_awareness stream), so we
+// fall back to whatever last-known position the entity carries, else null.
+function extractLookAtTarget(opts) {
+  if (!opts) return null;
+  if (opts.position && typeof opts.position.x === 'number') {
+    return { x: opts.position.x, y: opts.position.y, z: opts.position.z };
+  }
+  if (opts.entity) {
+    const e = opts.entity;
+    if (e.position && typeof e.position.x === 'number') {
+      return { x: e.position.x, y: e.position.y, z: e.position.z };
+    }
+    if (typeof e.x === 'number' && typeof e.y === 'number') return { x: e.x, y: e.y, z: e.z || 0 };
+  }
+  return null;
+}
 export function installExpressionStubs(jibo, requireFn) {
   try {
     const ex = jibo && jibo.expression;
@@ -541,11 +626,16 @@ export function installExpressionStubs(jibo, requireFn) {
     // Replace centerRobot with one that routes through the arbiter.
     // Real impl (Expression.ts:267-284): dofArbiter.centerRobot(requestor,
     // dofs, centerGlobally, cb). Skills pass options.{requestor, dofs,
-    // centerGlobally}.
+    // centerGlobally}. The host bridge interprets this as "drop lookAt
+    // target so the rig eases back to neutral via the next anim's
+    // approach-blend"; full pose-restoration is the next deepening.
     ex.centerRobot = (opts = {}) => new Promise((resolve) => {
       try {
         const req = opts.requestor || 'Behavior';
         const dofSet = opts.dofs && opts.dofs.getDOFs ? opts.dofs : null;
+        // Clear any active be-side lookAt so the lookat solver returns
+        // to neutral as part of the centering.
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-clear' }, '*'); } catch (_) { /* */ }
         dofArbiter.centerRobot(req, dofSet, !!opts.centerGlobally, () => resolve());
       } catch (_) { resolve(); }
     });
@@ -556,6 +646,56 @@ export function installExpressionStubs(jibo, requireFn) {
         const dofSet = opts.dofs && opts.dofs.getDOFs ? opts.dofs : null;
         dofArbiter.centerWithHybridPriority(req, trustee, dofSet, opts.owners || null, false, () => resolve());
       } catch (_) { resolve(); }
+    });
+    // acquireTarget — drive the body+eye lookat solver toward a world target.
+    // Source (Expression.ts:245-254) creates an AcquireHandle (server-side
+    // tracker that subscribes the attention manager to a target). Our impl
+    // posts the target to the host where createLookAtController's analytical
+    // IK solver (src/viewport/lookat.js) animates bottom/middle/top sections
+    // toward it. The returned handle's .release() drops the target so the
+    // rig returns to neutral. Many be skills use this for face-tracking
+    // (@be/introductions, @be/tutorial, @be/create, @be/circuit-saver).
+    ex.acquireTarget = (opts) => {
+      const tgt = extractLookAtTarget(opts);
+      if (tgt) {
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-target', target: tgt }, '*'); } catch (_) { /* */ }
+        console.log('[live-eye] acquireTarget @', tgt);
+      } else {
+        console.log('[live-eye] acquireTarget: no position/entity in opts, skipping');
+      }
+      const handle = makeAcquireHandle(() => {
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-clear' }, '*'); } catch (_) { /* */ }
+      });
+      return Promise.resolve(handle);
+    };
+    // awaitFace — wait for a face to be present at a target. The real impl
+    // is a long-poll on the LPS visual_awareness stream; we don't have one,
+    // so we drive the lookat for ~2s (simulating gaze acquisition) and then
+    // resolve. Returns an AcquireHandle compatible shape so skills calling
+    // .release() get the expected interface (Expression.ts:256-265).
+    ex.awaitFace = (opts) => {
+      const tgt = extractLookAtTarget(opts);
+      if (tgt) {
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-target', target: tgt }, '*'); } catch (_) { /* */ }
+      }
+      console.log('[live-eye] awaitFace @', tgt || '<no-pos>');
+      return Promise.resolve(makeAcquireHandle(() => {
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-clear' }, '*'); } catch (_) { /* */ }
+      }));
+    };
+    // lookAt — convenience wrapper for one-shot gaze. Real impl runs a
+    // Lookat for the duration the caller specifies (or until interrupted);
+    // we drive the host lookat and clear after `opts.duration` ms (default
+    // 2000 — matches typical embodied-speech gaze cues).
+    ex.lookAt = (opts = {}) => new Promise((resolve) => {
+      const tgt = extractLookAtTarget(opts);
+      if (!tgt) { resolve(); return; }
+      try { window.parent.postMessage({ __jibo: true, kind: 'lookat-target', target: tgt }, '*'); } catch (_) { /* */ }
+      const dur = typeof opts.duration === 'number' ? opts.duration : 2000;
+      setTimeout(() => {
+        try { window.parent.postMessage({ __jibo: true, kind: 'lookat-clear' }, '*'); } catch (_) { /* */ }
+        resolve();
+      }, dur);
     });
     // Diagnostic: log every animation instance creation so we can tell which
     // anim tags get through resolveAssetToPlayback. Helpful for tracking down
@@ -933,7 +1073,12 @@ export function initOfflineServices(jibo, requireFn) {
             const owner = _currentAudioOwner;
             if (owner && owner._audioIds) owner._audioIds.add(id);
             const fin = () => {
-              if (owner && owner._audioIds) owner._audioIds.delete(id);
+              if (owner && owner._audioIds) {
+                owner._audioIds.delete(id);
+                // If this drains the last id for a lingering instance,
+                // drop it from the preempt set — nothing left to stop.
+                if (owner._audioIds.size === 0) _completedWithLingeringAudio.delete(owner);
+              }
               if (callOpts.complete) { try { callOpts.complete(this); } catch (_) { /* */ } }
             };
             window.__pendingSounds.set(id, fin);
