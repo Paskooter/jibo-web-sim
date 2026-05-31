@@ -46,7 +46,12 @@ async function discoverSkills() {
       const m = /^\/skills\/([^/]+)\/package\.json$/.exec(url);
       if (m) dirs.add('/skills/' + m[1]);
     }
-    return Array.from(dirs).sort();
+    // Sort alphabetically, but float the on-device be bundle to the top
+    // so the picker defaults to it when it's present.
+    const sorted = Array.from(dirs).sort();
+    const beIdx = sorted.indexOf('/skills/jibo-be');
+    if (beIdx > 0) { sorted.splice(beIdx, 1); sorted.unshift('/skills/jibo-be'); }
+    return sorted;
   } catch (_) { return []; }
 }
 
