@@ -1436,6 +1436,22 @@ export function driveEye(jibo, prep) {
           frame[k] = active[k];
         }
       }
+      // Populate sourceTimes for any animation EyeContainer is tracking.
+      // EyeContainer.display (jibo.js:10046) consults meta.sourceTimes
+      // to (1) detect a pending anim ready to swap in, and (2) drive the
+      // current animation's update(time, dofValues) — which runs each
+      // TimelineLayer.update so PIXI overlays (JiboJis, dance flourishes,
+      // the coin-flip sprites) animate frame-by-frame. Without this the
+      // pending swap never happens; layers never get addChild'd to the
+      // EyeContainer; the screen stays blank.
+      // The time value is in SECONDS, used by TimelineLayer.update as
+      // `time - this.startTime` to compute the current frame. As long as
+      // it advances monotonically at real-time rate, the timelines run
+      // at the correct framerate.
+      meta.sourceTimes = {};
+      const animSec = performance.now() / 1000;
+      if (eye._animation && eye._animation.name) meta.sourceTimes[eye._animation.name] = animSec;
+      if (eye._pendingAnim && eye._pendingAnim.name) meta.sourceTimes[eye._pendingAnim.name] = animSec;
       if (eye.display) { try { eye.display(performance.now(), frame, meta); } catch (_) { /* eye not ready */ } }
     }
     requestAnimationFrame(tick);
