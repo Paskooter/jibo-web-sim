@@ -89,8 +89,8 @@ export function createRequire(jibo) {
   // When a manifest is loaded, ANY path is decidable: under skillRoot we check
   // the manifest, OUTSIDE skillRoot it's guaranteed missing (we only serve the
   // bundle's own tree). This also kills the require-walk's higher node_modules/
-  // 404s (the loop probes /external-skills/node_modules/X, /node_modules/X
-  // after exhausting the skill's own — none ever exist).
+  // 404s (the loop probes /skills/node_modules/X, /node_modules/X after
+  // exhausting the skill's own — none ever exist).
   const knownMissing = (url) => {
     if (!manifest || !skillRoot) return false;
     if (url.indexOf(skillRoot) !== 0) return true;
@@ -257,7 +257,7 @@ function makeHttpFs() {
   // because knownMissing() consults the skill manifest BEFORE the
   // fetch fires, so the unrewritten path fails the manifest check
   // and synthesizes ENOENT before HTTP ever sees the URL.
-  const ANIM_DB_TEX = '/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/';
+  const ANIM_DB_TEX = '/skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/';
   // Capture the SUBPATH after animations/textures/ — not just a single
   // filename — because anim-db textures are organized in subdirectories
   // (e.g. jibojis/coin-flip/coin-tails.png). Earlier version only

@@ -27,13 +27,28 @@ import { createNotificationsService } from './bridge/services/notifications-serv
 import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
-// Order matters: the picker shows entries in this order, and applySkill() at
-// boot picks the first one whose manifest loads successfully. The real Jibo
-// runtime bundle is first so it boots by default when present; the
-// hand-written demo bundles are the fallback for development or sharing the
-// sim without the real bundle checked out.
-const SKILLS = ['/external-skills/jibo-be', '/skills/hello-world', '/skills/fortune-teller'];
+// Skill bundles are discovered at boot by listing the /skills tree and
+// keeping every immediate subdirectory that has a package.json — the picker
+// then shows each bundle's name from its manifest. Drop a new bundle into
+// the skills folder and it appears in the picker on the next reload.
+let SKILLS = [];
 let switchSkill = () => {};   // assigned once the runtime is up
+
+async function discoverSkills() {
+  try {
+    const r = await fetch('/__list?root=/skills');
+    if (!r.ok) return [];
+    const { files = [] } = await r.json();
+    const dirs = new Set();
+    for (const e of files) {
+      const url = typeof e === 'string' ? e : (e && e.url) || '';
+      // Match /skills/<name>/package.json (one level deep — bundle root only)
+      const m = /^\/skills\/([^/]+)\/package\.json$/.exec(url);
+      if (m) dirs.add('/skills/' + m[1]);
+    }
+    return Array.from(dirs).sort();
+  } catch (_) { return []; }
+}
 
 const viewportEl = document.getElementById('viewport');
 const statusEl = document.getElementById('status');
@@ -81,11 +96,11 @@ serverInput.addEventListener('change', () => {
 
 // Skill picker — populated from each bundle's manifest (display-name).
 // Tracks the first dir whose manifest loaded so the boot can default to a
-// present skill rather than blindly picking SKILLS[0] (which might point at
-// a bundle not present in the current checkout).
+// present skill rather than picking a bundle that doesn't have a manifest.
 const skillPicker = document.getElementById('skill-picker');
 let firstLoadedDir = null;
 const skillsReady = (async () => {
+  SKILLS = await discoverSkills();
   for (const dir of SKILLS) {
     try {
       const m = await loadSkillManifest(dir);
@@ -486,7 +501,10 @@ async function startSkillRuntime() {
   }
   switchSkill = applySkill;
   // Wait for the picker to finish probing manifests, then pick the first
-  // one that actually loaded (defaults to the real-runtime bundle when
-  // present per SKILLS[0]).
-  skillsReady.then(() => applySkill(firstLoadedDir || SKILLS[0]));
+  // one that actually loaded.
+  skillsReady.then(() => {
+    const dir = firstLoadedDir || SKILLS[0];
+    if (dir) applySkill(dir);
+    else statusEl.textContent = `three.js r${viewport.threeRevision} · no skills found in /skills — drop a bundle there and reload`;
+  });
 }

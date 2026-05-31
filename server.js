@@ -43,15 +43,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Dev-only: serve external skill bundles for in-place compatibility testing,
-// kept OUT of the repo. Point EXTERNAL_SKILLS at a directory of unpacked
-// bundles; defaults to /tmp.
-const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
+// Skill bundle directory. Drop unpacked skill bundles in here and they
+// show up in the picker; the demos already shipped in ./skills work the
+// same way. Override via EXTERNAL_SKILLS if you want to point elsewhere.
+const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || join(__dirname, 'skills');
 // Optional launch-rule pack — a separate tree of launch.rule + .grm files
-// the NLU registry should pick up in addition to anything the loaded
-// bundle ships. Unset means rules-only-from-bundle. When set, contents are
-// served at /external-rules and walked the same way as the skill tree.
-const EXTERNAL_RULES = process.env.EXTERNAL_RULES || '';
+// the NLU registry picks up in addition to anything the loaded bundle
+// ships. Defaults to ./rules (gitignored, empty by default) so users can
+// drop a rule pack in without configuration. Override via EXTERNAL_RULES.
+const EXTERNAL_RULES = process.env.EXTERNAL_RULES || join(__dirname, 'rules');
 // The CommonJS require shim probes extensionless paths (`index`) and bare
 // directories. Disable the `extensions`/`index`/`redirect` fallbacks so those
 // 404 instead of returning a directory's index.html — letting the shim fall
@@ -66,7 +66,7 @@ const EXTERNAL_RULES = process.env.EXTERNAL_RULES || '';
 // Served at its real URL (not a blob) so the worker's relative .crn XHR still
 // resolves against its http origin.
 app.get(/webgl-texture-util\.js$/, (req, res, next) => {
-  const prefix = '/external-skills/';
+  const prefix = '/skills/';
   if (!req.path.startsWith(prefix)) { next(); return; }
   const abs = normalize(join(EXTERNAL_SKILLS, req.path.slice(prefix.length)));
   if (!abs.startsWith(normalize(EXTERNAL_SKILLS))) { next(); return; }
@@ -90,16 +90,16 @@ app.get(/\/@be\/[^/]+\/animations\/textures\/(.+)$/, (req, res, next) => {
   const m = /\/@be\/[^/]+\/animations\/textures\/(.+)$/.exec(req.path);
   if (!m) { next(); return; }
   const subpath = m[1];
-  const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${subpath}`;
+  const fallback = `/skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${subpath}`;
   // Probe disk to avoid an infinite loop if the fallback is also missing.
   try {
-    const abs = normalize(join(EXTERNAL_SKILLS, fallback.slice('/external-skills/'.length)));
+    const abs = normalize(join(EXTERNAL_SKILLS, fallback.slice('/skills/'.length)));
     if (existsSync(abs)) return res.redirect(302, fallback);
   } catch (_) { /* fall through */ }
   next();
 });
 
-app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
+app.use('/skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
 
 // Optional companion rule pack served at /external-rules. The boot loader
 // walks this tree the same way it walks the bundle's own tree, so both
@@ -108,22 +108,20 @@ if (EXTERNAL_RULES) {
   app.use('/external-rules', express.static(EXTERNAL_RULES, { index: false, redirect: false }));
 }
 
-// Recursive file manifest for a served skill dir. The CommonJS require shim uses
+// Recursive file manifest for a served dir. The CommonJS require shim uses
 // this to resolve modules WITHOUT probing (each missing probe is a console 404),
 // which otherwise floods the devtools console with thousands of failed requests.
-// Supports both external bundles (/external-skills/...) and in-repo demo skills
-// (/skills/...). With a manifest in hand the shim treats every path outside the
-// skill root as known-missing, eliminating the require()-walk's higher-up
-// node_modules/ probes (e.g. /node_modules/pixi.js → 404 cascade in shim mode).
+// Accepts /skills (the bundle tree) and /external-rules (the rule pack). With
+// a manifest in hand the shim treats every path outside the skill root as
+// known-missing, eliminating the require()-walk's higher-up node_modules/
+// probes (e.g. /node_modules/pixi.js → 404 cascade in shim mode).
 app.get('/__list', (req, res) => {
   const root = String(req.query.root || '');
   let baseAbs = null;
-  if (root.startsWith('/external-skills/')) {
-    baseAbs = normalize(join(EXTERNAL_SKILLS, root.slice('/external-skills/'.length)));
+  if (root === '/skills' || root.startsWith('/skills/')) {
+    const sub = root === '/skills' ? '' : root.slice('/skills/'.length);
+    baseAbs = normalize(join(EXTERNAL_SKILLS, sub));
     if (!baseAbs.startsWith(normalize(EXTERNAL_SKILLS))) { res.status(400).json({ files: [] }); return; }
-  } else if (root.startsWith('/skills/')) {
-    baseAbs = normalize(join(__dirname, root.replace(/^\//, '')));
-    if (!baseAbs.startsWith(normalize(join(__dirname, 'skills')))) { res.status(400).json({ files: [] }); return; }
   } else if (root.startsWith('/external-rules')) {
     if (!EXTERNAL_RULES) { res.json({ files: [] }); return; }
     baseAbs = normalize(join(EXTERNAL_RULES, root.slice('/external-rules'.length).replace(/^\//, '')));

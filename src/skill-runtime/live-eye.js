@@ -1288,7 +1288,7 @@ export function initOfflineServices(jibo, requireFn) {
             let url = src;
             const i = src.lastIndexOf('/node_modules/');
             if (i >= 0) url = location.origin + (skillDir || '') + src.slice(i);
-            else if (src.indexOf('/external-skills/') >= 0) url = location.origin + src.slice(src.indexOf('/external-skills/'));
+            else if (src.indexOf('/skills/') >= 0) url = location.origin + src.slice(src.indexOf('/skills/'));
             else if (src[0] === '/') url = location.origin + src;
             // Attribute this audio to the currently-firing animation event
             // (set by fireEventsUpTo around events.audio.emit) so that an
