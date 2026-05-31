@@ -15,7 +15,7 @@
 
 import { installJiboShim } from './jibo-shim.js';
 import { createRequire } from './cjs-require.js';
-import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, connectCloud } from './live-eye.js';
+import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, connectCloud, installIdleMotion } from './live-eye.js';
 import { installServiceBus } from './services/index.js';
 import { installKbService } from './services/kb-service.js';
 import { localParse, KNOWN_PHRASES } from './local-nlu.js';
@@ -203,7 +203,16 @@ async function bootReal() {
     let waited = 0;
     const wait = setInterval(() => {
       waited += 100;
-      if (window.jibo && window.jibo.face) { clearInterval(wait); driveEye(window.jibo, eye); connectCloud(req); }
+      if (window.jibo && window.jibo.face) {
+        clearInterval(wait);
+        driveEye(window.jibo, eye);
+        connectCloud(req);
+        // Start the ambient blink + gaze-drift driver once the runtime
+        // is fully up. Animations are queried from the indexed animDB
+        // and routed through the standard expression/lookat path, so
+        // explicit skill playback preempts them via the DOF arbiter.
+        installIdleMotion(window.jibo);
+      }
       else if (waited > 20000) { clearInterval(wait); console.warn('[boot] real runtime: jibo.face never appeared'); }
     }, 100);
   }

@@ -1469,6 +1469,96 @@ export function patchBeFramework(requireFn) {
 // the expression service's dofs event would. This lets the eye AND
 // the menu/views render naturally, and the EyeView's touch handler
 // reach onTouch -> MainMenu.
+// Install an ambient idle motion driver — the always-on background
+// motion that keeps Jibo feeling alive between (and during) explicit
+// skill behaviors. Three independent timers:
+//   blinks       — Eye_Blink_01 / _02 every 3-13s, matching the
+//                  on-device "Idle Blink Occasionally" cadence
+//   gaze drift   — small random look-at offsets every 8-15s, to a
+//                  point a couple metres in front of the viewport
+//   body sway    — handled by driveEye via Math.sin oscillation;
+//                  this installer doesn't touch the body
+// All of these go through the existing expression/lookAt + animDB
+// path, so they share the DOF arbiter with explicit skill animations.
+// Explicit anims have higher priority and preempt idle motion cleanly.
+export function installIdleMotion(jibo) {
+  if (!jibo || jibo.__idleMotionInstalled) return;
+  jibo.__idleMotionInstalled = true;
+
+  const ex = jibo.expression;
+  const animDB = jibo.animDB;
+
+  // Wait briefly for animDB to be indexed (it loads asynchronously
+  // during plugin init). Without ready animations the first few blink
+  // attempts just no-op.
+  const ready = () => animDB && typeof animDB.query === 'function';
+
+  let blinkTimer = null;
+  let gazeTimer = null;
+
+  // Pick a random blink animation from the indexed pool and fire it.
+  // The animation queries are kept tight (no SFX/SSA variants) so a
+  // blink stays a blink — no eye-only laughter sneaking in.
+  function fireBlink() {
+    try {
+      if (ready() && ex && typeof ex.createAndPlayAnimation === 'function') {
+        const res = animDB.query({
+          categories: ['blinks'],
+          includeMeta: [],
+          includeSomeMeta: ['single', 'double'],
+          excludeMeta: ['sfx-only', 'ssa-only'],
+        });
+        const list = (res && res.matching) || [];
+        if (list.length > 0) {
+          const pick = list[Math.floor(Math.random() * list.length)];
+          // Use the standard expression.createAndPlayAnimation path —
+          // routes through the arbiter as a Behavior-priority request,
+          // so any higher-priority playback wins automatically.
+          if (pick && pick.createFromConfig) {
+            Promise.resolve(pick.createFromConfig({})).then((pb) => pb && pb.play && pb.play({})).catch(() => {});
+          }
+        }
+      }
+    } catch (_) { /* arbiter rejected, try next tick */ }
+    scheduleBlink();
+  }
+  function scheduleBlink() {
+    const delay = 3000 + Math.random() * 10000;   // 3-13s
+    blinkTimer = setTimeout(fireBlink, delay);
+  }
+
+  // Shift the gaze to a random point a couple metres in front of the
+  // robot, slightly off-center. lookAt resolves the eye DOFs through
+  // the existing eye-residual path so the iris drifts to the target.
+  function driftGaze() {
+    try {
+      if (ex && typeof ex.lookAt === 'function') {
+        const yaw = (Math.random() - 0.5) * 0.7;       // ±~20 deg
+        const pitch = (Math.random() - 0.5) * 0.4;     // ±~12 deg
+        const distance = 1.5 + Math.random() * 0.8;
+        const target = {
+          x: Math.sin(yaw) * distance,
+          y: Math.sin(pitch) * distance + 0.2,
+          z: Math.cos(yaw) * distance,
+        };
+        Promise.resolve(ex.lookAt({ position: target, duration: 1500 })).catch(() => {});
+      }
+    } catch (_) { /* ignore */ }
+    scheduleGaze();
+  }
+  function scheduleGaze() {
+    const delay = 6000 + Math.random() * 9000;     // 6-15s
+    gazeTimer = setTimeout(driftGaze, delay);
+  }
+
+  // Start both timers offset so they don't sync up. First blink fires
+  // earlier than first gaze drift so users see motion right away.
+  blinkTimer = setTimeout(fireBlink, 1500 + Math.random() * 2000);
+  gazeTimer = setTimeout(driftGaze, 4000 + Math.random() * 3000);
+
+  console.log('[live-eye] idle motion installed (blinks + gaze drift)');
+}
+
 export function driveEye(jibo, prep) {
   console.log('[live-eye] streaming idle DOFs to the eye (view-managed)');
   const dofs = prep.dofs;
