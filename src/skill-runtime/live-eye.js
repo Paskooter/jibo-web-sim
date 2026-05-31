@@ -1471,16 +1471,15 @@ export function patchBeFramework(requireFn) {
 // reach onTouch -> MainMenu.
 // Install an ambient idle motion driver — the always-on background
 // motion that keeps Jibo feeling alive between (and during) explicit
-// skill behaviors. Three independent timers:
-//   blinks       — Eye_Blink_01 / _02 every 3-13s, matching the
-//                  on-device "Idle Blink Occasionally" cadence
-//   gaze drift   — small random look-at offsets every 8-15s, to a
-//                  point a couple metres in front of the viewport
-//   body sway    — handled by driveEye via Math.sin oscillation;
-//                  this installer doesn't touch the body
-// All of these go through the existing expression/lookAt + animDB
-// path, so they share the DOF arbiter with explicit skill animations.
-// Explicit anims have higher priority and preempt idle motion cleanly.
+// skill behaviors. Two layers:
+//   blinks    — pick from the indexed blinks pool every 3-13s,
+//               matching the on-device "Idle Blink Occasionally" cadence
+//   body sway — continuous slow sinusoidal modulation on the three
+//               body-section rotations, anchored to the last applied
+//               pose so it composes with any animation playing
+// Both go through the same channels explicit skill animations use, so
+// when a skill fires (dance, sing, etc.) its higher-priority playback
+// preempts the sway/blink cleanly.
 export function installIdleMotion(jibo) {
   if (!jibo || jibo.__idleMotionInstalled) return;
   jibo.__idleMotionInstalled = true;
@@ -1493,12 +1492,13 @@ export function installIdleMotion(jibo) {
   // attempts just no-op.
   const ready = () => animDB && typeof animDB.query === 'function';
 
-  let blinkTimer = null;
-  let gazeTimer = null;
-
-  // Pick a random blink animation from the indexed pool and fire it.
-  // The animation queries are kept tight (no SFX/SSA variants) so a
-  // blink stays a blink — no eye-only laughter sneaking in.
+  // --- Periodic blinks ---
+  // Cache key matches what the on-device auto-rule manager uses for
+  // blink/comma/question/initiate animations — the bundle pre-caches
+  // those assets under the 'global' cache at boot, so playback hits the
+  // cache instead of going back to disk (and instead of producing the
+  // "Trying to load X but it needs to be cached!" warning every time).
+  const BLINK_CONFIG = { cache: 'global' };
   function fireBlink() {
     try {
       if (ready() && ex && typeof ex.createAndPlayAnimation === 'function') {
@@ -1511,52 +1511,55 @@ export function installIdleMotion(jibo) {
         const list = (res && res.matching) || [];
         if (list.length > 0) {
           const pick = list[Math.floor(Math.random() * list.length)];
-          // Use the standard expression.createAndPlayAnimation path —
-          // routes through the arbiter as a Behavior-priority request,
-          // so any higher-priority playback wins automatically.
           if (pick && pick.createFromConfig) {
-            Promise.resolve(pick.createFromConfig({})).then((pb) => pb && pb.play && pb.play({})).catch(() => {});
+            Promise.resolve(pick.createFromConfig(BLINK_CONFIG)).then((pb) => pb && pb.play && pb.play({})).catch(() => {});
           }
         }
       }
     } catch (_) { /* arbiter rejected, try next tick */ }
-    scheduleBlink();
+    setTimeout(fireBlink, 3000 + Math.random() * 10000);   // 3-13s
   }
-  function scheduleBlink() {
-    const delay = 3000 + Math.random() * 10000;   // 3-13s
-    blinkTimer = setTimeout(fireBlink, delay);
-  }
+  setTimeout(fireBlink, 1500 + Math.random() * 2000);
 
-  // Shift the gaze to a random point a couple metres in front of the
-  // robot, slightly off-center. lookAt resolves the eye DOFs through
-  // the existing eye-residual path so the iris drifts to the target.
-  function driftGaze() {
+  // --- Body sway ---
+  // Continuous slow oscillation on the three body-section rotations.
+  // Each section gets its own phase + frequency so the motion looks
+  // organic rather than perfectly coherent. Amplitudes are tiny — just
+  // enough that the rig visibly breathes without looking jittery.
+  //
+  // We post body DOFs as deltas added on top of _bodyState.lastApplied,
+  // which is the rig's actual current pose (animation playback updates
+  // it as each frame writes through startDofPlayback). When no anim is
+  // playing, lastApplied is constant and the sway is the only motion;
+  // when an anim IS playing, sway adds a barely-noticeable wobble that
+  // the anim's much-larger motion drowns out.
+  const SWAY = {
+    bottomSection_r: { amp: 0.012, freq: 0.55, phase: 0 },
+    middleSection_r: { amp: 0.020, freq: 0.75, phase: 1.1 },
+    topSection_r:    { amp: 0.025, freq: 0.40, phase: 2.3 },
+  };
+  function swayTick() {
     try {
-      if (ex && typeof ex.lookAt === 'function') {
-        const yaw = (Math.random() - 0.5) * 0.7;       // ±~20 deg
-        const pitch = (Math.random() - 0.5) * 0.4;     // ±~12 deg
-        const distance = 1.5 + Math.random() * 0.8;
-        const target = {
-          x: Math.sin(yaw) * distance,
-          y: Math.sin(pitch) * distance + 0.2,
-          z: Math.cos(yaw) * distance,
-        };
-        Promise.resolve(ex.lookAt({ position: target, duration: 1500 })).catch(() => {});
+      const t = performance.now() / 1000;
+      const dofs = {};
+      let any = false;
+      for (const name of Object.keys(SWAY)) {
+        const s = SWAY[name];
+        const state = _bodyState[name];
+        const base = state ? state.lastApplied : 0;
+        dofs[name] = base + Math.sin(t * 2 * Math.PI * s.freq + s.phase) * s.amp;
+        any = true;
       }
-    } catch (_) { /* ignore */ }
-    scheduleGaze();
+      if (any && typeof window !== 'undefined' && window.parent) {
+        window.parent.postMessage({ __jibo: true, kind: 'dofs', dofs }, '*');
+      }
+    } catch (_) { /* */ }
   }
-  function scheduleGaze() {
-    const delay = 6000 + Math.random() * 9000;     // 6-15s
-    gazeTimer = setTimeout(driftGaze, delay);
-  }
+  // 30 Hz sway — fast enough to look smooth, slow enough not to flood
+  // the host bridge.
+  setInterval(swayTick, 33);
 
-  // Start both timers offset so they don't sync up. First blink fires
-  // earlier than first gaze drift so users see motion right away.
-  blinkTimer = setTimeout(fireBlink, 1500 + Math.random() * 2000);
-  gazeTimer = setTimeout(driftGaze, 4000 + Math.random() * 3000);
-
-  console.log('[live-eye] idle motion installed (blinks + gaze drift)');
+  console.log('[live-eye] idle motion installed (blinks + body sway)');
 }
 
 export function driveEye(jibo, prep) {
