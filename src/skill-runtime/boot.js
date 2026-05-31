@@ -18,6 +18,7 @@ import { createRequire } from './cjs-require.js';
 import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, connectCloud } from './live-eye.js';
 import { installServiceBus } from './services/index.js';
 import { installKbService } from './services/kb-service.js';
+import { localParse, KNOWN_PHRASES } from './local-nlu.js';
 
 const params = new URLSearchParams(location.search);
 const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
@@ -185,6 +186,36 @@ async function bootReal() {
       // intent="sure" instead of the canonical "yes" and rejects.
       const js = window.jibo && window.jibo.jetstream;
       if (!js || typeof js.startLocalTurn !== 'function') return;
+
+      // No-pegasus fallback: when the host has no backend server configured,
+      // the cloud path can't reach an IntentRouter. Run a local regex-based
+      // parser (src/skill-runtime/local-nlu.js) and emit the result through
+      // the same jetstream events GlobalManagerService listens on. Only
+      // ON-ROBOT @be/* skills work this way — cloud-skill intents (chitchat
+      // dances, news) require a real SKILL_ACTION mim graph from the cloud
+      // and are silently dropped (with a log hint).
+      if (!window.__JIBO_SERVER__) {
+        const result = localParse(text);
+        if (!result) {
+          console.log('[local-nlu] no match for', JSON.stringify(text), '— try one of:', KNOWN_PHRASES.slice(0, 6).join(' / '), '...');
+          return;
+        }
+        console.log('[local-nlu] matched', JSON.stringify(text), '->', result.match.skillID, '(' + result.nlu.intent + ')');
+        try {
+          if (js.events && js.events.localTurnResult && typeof js.events.localTurnResult.emit === 'function') {
+            js.events.localTurnResult.emit({ status: 'SUCCEEDED', result });
+          } else {
+            // Fallback: directly emit skillRelaunch if jetstream events
+            // aren't wired (older code path).
+            const ge = window.jibo && window.jibo.globalEvents;
+            if (ge && ge.skillRelaunch && typeof ge.skillRelaunch.emit === 'function') {
+              ge.skillRelaunch.emit(result);
+            }
+          }
+        } catch (e) { console.warn('[local-nlu] emit failed:', (e && e.message) || e); }
+        return;
+      }
+
       console.log('[utterance]', JSON.stringify(text), '-> startLocalTurn launch (pre-parse)');
       js.startLocalTurn({ nluRules: ['launch'], clientASR: text })
         .then((turn) => (turn && turn.promise) ? turn.promise : null)
