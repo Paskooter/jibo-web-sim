@@ -33,16 +33,18 @@ before starting.
 ### Importing the rule pack
 
 For offline NLU coverage beyond what the loaded bundle ships, pull the
-companion rule pack into `./rules/`. One-liner:
+[companion rule pack][rule-pack] into `./rules/`. One-liner:
 
 ```sh
-curl -sSL https://pvindex.org/gitea/pasketti/jibo-web-sim-rules/archive/main.tar.gz \
+curl -sSL https://github.com/Paskooter/jibo-web-sim-rules/archive/refs/heads/main.tar.gz \
   | tar xz -C rules --strip-components=1
 ```
 
 On the next reload, the picker / NLU registry pick the rule files up
 automatically. Same shape works for any other rule pack — just drop the
 tree into `./rules/`.
+
+[rule-pack]: https://github.com/Paskooter/jibo-web-sim-rules
 
 ### Pointing elsewhere
 
