@@ -374,3 +374,42 @@ body {
   pointer-events: none;
 }
 #photo-thumb[hidden] { display: none; }
+
+/* ---------- Mobile / narrow-screen layout ----------------------------------
+ * Stack the viewport on top, sidebar below. Bumps tap targets up so buttons
+ * are easier to hit with a finger. Triggers on either small width OR coarse
+ * pointer (phones, tablets with mouse-less input).
+ */
+@media (max-width: 720px), (pointer: coarse) and (max-width: 1100px) {
+  #stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(40vh, 55vh) 1fr;
+  }
+  #sidebar {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    min-height: 0;
+  }
+  #tabs button {
+    padding: 12px 6px;     /* bigger touch targets */
+    font-size: 13px;
+  }
+  #tab-panels { padding: 10px; }
+  #topbar { gap: 8px; padding: 0 8px; height: 48px; }
+  #topbar .status { display: none; }
+  #topbar button { padding: 8px 12px; font-size: 13px; }
+  .skill-pick select { padding: 6px 8px; font-size: 13px; }
+
+  /* Chat composer — the most-used surface on mobile. Make the input bigger. */
+  .chat-panel input[type="text"], .chat-panel textarea { font-size: 16px; padding: 10px; }
+  .chat-panel button { padding: 10px 14px; font-size: 14px; }
+
+  /* Notification banner shouldn't span the whole top on narrow screens. */
+  #notification-banner {
+    width: calc(100% - 24px);
+    left: 12px;
+    margin-left: 0;
+  }
+  /* Photo thumbnail smaller on mobile. */
+  #photo-thumb { width: 140px; right: 10px; bottom: 10px; }
+}

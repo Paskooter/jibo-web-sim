@@ -399,7 +399,12 @@ async function startSkillRuntime() {
   dom.addEventListener('pointerup', (e) => {
     if (dragging && panned) {
       bridge.emit('face', 'pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
-    } else if (!viewport.isOrbitModifier() && Math.hypot(e.clientX - downX, e.clientY - downY) <= 6 && performance.now() - downT <= 350) {
+    } else if (Math.hypot(e.clientX - downX, e.clientY - downY) <= 6 && performance.now() - downT <= 350) {
+      // Tap on the face. Allowed regardless of the orbit modifier state —
+      // a single quick tap is always a face touch (used to tap menu items
+      // etc.). The drag case above is what differentiates a tap from an
+      // orbit gesture: a real orbit drag moves more than 6 px before
+      // release, so the tap branch doesn't fire then.
       const f = faceAt(e);
       if (f) bridge.emit('face', 'touch', f);
     }
