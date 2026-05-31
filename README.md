@@ -23,15 +23,30 @@ npm install     # express only
 node server.js  # http://localhost:8080/
 ```
 
-Then point `EXTERNAL_SKILLS` at the directory containing your unpacked
-skill bundle (defaults to `/tmp`), open the page, click **Start Jibo**.
-The click is what unlocks the page's audio context.
+Drop unpacked skill bundles into `./skills/` (two demo bundles already
+live there); they show up in the picker. Open the page, click
+**Start Jibo** — the click also unlocks the page's audio context.
 
 To connect to a cloud backend, enter its host:port in the host UI field
 before starting.
 
-For offline NLU coverage beyond what the bundle ships, point
-`EXTERNAL_RULES` at a separate rule pack:
+### Importing the rule pack
+
+For offline NLU coverage beyond what the loaded bundle ships, pull the
+companion rule pack into `./rules/`. One-liner:
+
+```sh
+curl -sSL https://pvindex.org/gitea/pasketti/jibo-web-sim-rules/archive/main.tar.gz \
+  | tar xz -C rules --strip-components=1
+```
+
+On the next reload, the picker / NLU registry pick the rule files up
+automatically. Same shape works for any other rule pack — just drop the
+tree into `./rules/`.
+
+### Pointing elsewhere
+
+The defaults `./skills` and `./rules` are overridable per process:
 
 ```sh
 EXTERNAL_SKILLS=/path/to/bundles \
@@ -39,21 +54,22 @@ EXTERNAL_RULES=/path/to/rule-pack \
 node server.js
 ```
 
-The pack is walked the same way as the bundle — any `launch.rule` files
-under `<pack>/node_modules/<scope>/<name>/` register as that skill, and any
+Either tree is walked the same way as a bundle — any `launch.rule` files
+under `<root>/node_modules/<scope>/<name>/` register as that skill, and any
 `*.grm` files register as factory grammars.
 
 ## What you supply
 
 The simulator ships **no skill content of its own**. You bring:
 
-- A skill bundle (typically a `jibo-be` build) unpacked at some path
-  under `EXTERNAL_SKILLS`.
+- A skill bundle (typically a `jibo-be` build) dropped into `./skills/`
+  (or a custom dir via `EXTERNAL_SKILLS`).
 - The bundle's own `launch.rule` files, anywhere under
   `<bundle>/node_modules/**/launch.rule` — they're auto-discovered on
   boot. Same for `.grm` factory grammars.
-- Optionally, a companion rule pack pointed to by `EXTERNAL_RULES` for
-  skills whose `launch.rule` isn't shipped on-device.
+- Optionally, a companion rule pack in `./rules/` (gitignored) or a
+  custom dir via `EXTERNAL_RULES`, for skills whose `launch.rule` isn't
+  shipped on-device.
 
 If neither source has rules for a given input, the regex-backed
 quick-match table is the fallback.
@@ -96,7 +112,8 @@ src/
     live-eye.js                   DOF playback, audio routing
     nlu/                          rule-DSL lexer/parser/matcher
     services/                     in-memory service bus + stand-ins
-skills/                           a couple of hand-written demo bundles
+skills/                           drop unpacked bundles here (demos pre-installed)
+rules/                            drop a launch-rule pack here (empty by default)
 assets/jibo-legacy/               body geom/skel/kin + texture for the rig
 ```
 
