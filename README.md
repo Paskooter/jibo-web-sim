@@ -36,7 +36,7 @@ For a downloaded `jibo-be-12.0.0.tar.gz` (or any other version), unpack
 it under `./skills/jibo-be/`:
 
 ```sh
-mkdir -p skills/jibo-be && tar xzf jibo-be-12.0.0.tar.gz -C skills/jibo-be --strip-components=1
+mkdir -p skills/jibo-be && tar xzf jibo-be-12.0.0.tar.gz -C skills/jibo-be
 ```
 
 The bundle shows up in the picker on the next reload.
