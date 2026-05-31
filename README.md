@@ -30,6 +30,19 @@ The click is what unlocks the page's audio context.
 To connect to a cloud backend, enter its host:port in the host UI field
 before starting.
 
+For offline NLU coverage beyond what the bundle ships, point
+`EXTERNAL_RULES` at a separate rule pack:
+
+```sh
+EXTERNAL_SKILLS=/path/to/bundles \
+EXTERNAL_RULES=/path/to/rule-pack \
+node server.js
+```
+
+The pack is walked the same way as the bundle — any `launch.rule` files
+under `<pack>/node_modules/<scope>/<name>/` register as that skill, and any
+`*.grm` files register as factory grammars.
+
 ## What you supply
 
 The simulator ships **no skill content of its own**. You bring:
@@ -39,9 +52,11 @@ The simulator ships **no skill content of its own**. You bring:
 - The bundle's own `launch.rule` files, anywhere under
   `<bundle>/node_modules/**/launch.rule` — they're auto-discovered on
   boot. Same for `.grm` factory grammars.
+- Optionally, a companion rule pack pointed to by `EXTERNAL_RULES` for
+  skills whose `launch.rule` isn't shipped on-device.
 
-If the bundle ships rules, they're picked up. If it doesn't, only the
-regex-backed quick-match table fires and offline NLU coverage is thin.
+If neither source has rules for a given input, the regex-backed
+quick-match table is the fallback.
 
 ## Architecture
 

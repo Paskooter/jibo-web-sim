@@ -47,6 +47,11 @@ app.use((req, res, next) => {
 // kept OUT of the repo. Point EXTERNAL_SKILLS at a directory of unpacked
 // bundles; defaults to /tmp.
 const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
+// Optional launch-rule pack — a separate tree of launch.rule + .grm files
+// the NLU registry should pick up in addition to anything the loaded
+// bundle ships. Unset means rules-only-from-bundle. When set, contents are
+// served at /external-rules and walked the same way as the skill tree.
+const EXTERNAL_RULES = process.env.EXTERNAL_RULES || '';
 // The CommonJS require shim probes extensionless paths (`index`) and bare
 // directories. Disable the `extensions`/`index`/`redirect` fallbacks so those
 // 404 instead of returning a directory's index.html — letting the shim fall
@@ -96,6 +101,13 @@ app.get(/\/@be\/[^/]+\/animations\/textures\/(.+)$/, (req, res, next) => {
 
 app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redirect: false }));
 
+// Optional companion rule pack served at /external-rules. The boot loader
+// walks this tree the same way it walks the bundle's own tree, so both
+// contribute launch.rule and *.grm files to the registry.
+if (EXTERNAL_RULES) {
+  app.use('/external-rules', express.static(EXTERNAL_RULES, { index: false, redirect: false }));
+}
+
 // Recursive file manifest for a served skill dir. The CommonJS require shim uses
 // this to resolve modules WITHOUT probing (each missing probe is a console 404),
 // which otherwise floods the devtools console with thousands of failed requests.
@@ -112,6 +124,10 @@ app.get('/__list', (req, res) => {
   } else if (root.startsWith('/skills/')) {
     baseAbs = normalize(join(__dirname, root.replace(/^\//, '')));
     if (!baseAbs.startsWith(normalize(join(__dirname, 'skills')))) { res.status(400).json({ files: [] }); return; }
+  } else if (root.startsWith('/external-rules')) {
+    if (!EXTERNAL_RULES) { res.json({ files: [] }); return; }
+    baseAbs = normalize(join(EXTERNAL_RULES, root.slice('/external-rules'.length).replace(/^\//, '')));
+    if (!baseAbs.startsWith(normalize(EXTERNAL_RULES))) { res.status(400).json({ files: [] }); return; }
   } else {
     res.json({ files: [] }); return;
   }

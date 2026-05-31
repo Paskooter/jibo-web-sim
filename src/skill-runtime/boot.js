@@ -21,34 +21,67 @@ import { installKbService } from './services/kb-service.js';
 import { localParse, KNOWN_PHRASES } from './local-nlu.js';
 import { createRegistry } from './nlu/index.js';
 
-// Rule-based NLU registry. Loaded from whatever rule files the user's skill
-// bundle ships under its own tree:
-//   - <bundle>/node_modules/<scope>/<name>/launch.rule  → registered as <scope>/<name>
-//   - <bundle>/**/*.grm                                  → registered as a factory grammar
-// Nothing is bundled with the simulator — the rules are part of the user's
-// bundle. Used as PRIMARY local NLU when no backend is configured; falls back
-// to the regex-based local-nlu.js for any input the rules don't match.
+// Rule-based NLU registry. Loaded from rule files in two places:
+//   - The user's skill bundle, under <bundle>/node_modules/<scope>/<name>/launch.rule
+//     and <bundle>/**/*.grm.
+//   - An optional companion rule pack served at /external-rules, walked the
+//     same way. Configured server-side via the EXTERNAL_RULES env var.
+// Nothing is bundled with the simulator. Used as PRIMARY local NLU when no
+// backend is configured; falls back to the regex matcher in local-nlu.js for
+// any input the rules don't cover.
 const _nluRegistry = createRegistry();
+
+// Fetch a manifest from /__list?root=... synchronously-friendly: returns a
+// Map<url, size> (matching the cjs-require manifest shape). Empty Map on
+// any failure or empty response.
+async function _fetchListing(root) {
+  try {
+    const r = await fetch('/__list?root=' + encodeURIComponent(root));
+    if (!r.ok) return new Map();
+    const { files = [] } = await r.json();
+    const out = new Map();
+    for (const e of files) {
+      if (typeof e === 'string') out.set(e, 0);
+      else if (e && e.url) out.set(e.url, e.size || 0);
+    }
+    return out;
+  } catch (_) { return new Map(); }
+}
+
 const _nluReady = (async () => {
-  // Wait briefly for the bundle's file manifest to be available — it's
-  // populated synchronously by cjs-require during bundle boot, but our NLU
-  // setup races with the loader. If the bundle never loads (e.g. host without
-  // a configured skill), this just times out and we serve regex-only NLU.
+  // Wait briefly for the bundle's file manifest to be available — populated
+  // by the require shim during bundle boot. If the bundle never loads, this
+  // times out and we serve regex-only NLU (plus whatever the rule pack has).
   for (let i = 0; i < 50 && !(window.__skillManifest && window.__skillManifest.size); i += 1) {
     await new Promise((r) => setTimeout(r, 100));
   }
-  const m = window.__skillManifest;
-  if (!m || !m.size) { console.log('[nlu] no skill manifest; rule-based NLU disabled'); return; }
   const root = window.__SKILL_DIR__ || '';
-  const launchRe = new RegExp('^' + root.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&') + '/node_modules/(@[^/]+/[^/]+|[^/]+)/launch\\.rule$');
-  const grmRe = /\/([^/]+)\.grm$/;
+  // Combine the bundle's tree with the optional rule pack.
+  const rulePackManifest = await _fetchListing('/external-rules');
+  const sources = [];
+  if (window.__skillManifest && window.__skillManifest.size) {
+    sources.push({ root, manifest: window.__skillManifest });
+  }
+  if (rulePackManifest.size) {
+    sources.push({ root: '/external-rules', manifest: rulePackManifest });
+  }
+  if (sources.length === 0) {
+    console.log('[nlu] no manifests available; rule-based NLU disabled');
+    return;
+  }
+
   const launches = [];
   const grammars = [];
-  for (const url of m.keys()) {
-    const lm = launchRe.exec(url);
-    if (lm) { launches.push({ pkg: lm[1], url }); continue; }
-    const gm = grmRe.exec(url);
-    if (gm) grammars.push({ name: gm[1], url });
+  for (const src of sources) {
+    const escapedRoot = src.root.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+    const launchRe = new RegExp('^' + escapedRoot + '/node_modules/(@[^/]+/[^/]+|[^/]+)/launch\\.rule$');
+    const grmRe = /\/([^/]+)\.grm$/;
+    for (const url of src.manifest.keys()) {
+      const lm = launchRe.exec(url);
+      if (lm) { launches.push({ pkg: lm[1], url }); continue; }
+      const gm = grmRe.exec(url);
+      if (gm) grammars.push({ name: gm[1], url });
+    }
   }
   for (const { pkg, url } of launches) {
     try { await _nluRegistry.loadSkill(pkg, url); }
