@@ -199,6 +199,24 @@ function sampleChannel(times, values, t) {
   return values[i - 1] + (values[i] - values[i - 1]) * a;
 }
 
+// Last body DOFs we actually posted to the host viewport. Initialized to 0
+// because the rig starts at neutral. Each tick of startDofPlayback's body
+// loop updates this so the NEXT animation can ease in from the pose the
+// rig is currently holding instead of snapping to its own t=0 values.
+//
+// The real robot's expression service handles this via the DOFArbiter
+// (per-layer priorities + cross-layer blending); we don't run an arbiter,
+// so an in-process approach-blend at the head of each playback achieves
+// the same observable smoothness for the common case of "play one anim,
+// then another, then back to rest".
+const _lastBodyDofs = { bottomSection_r: 0, middleSection_r: 0, topSection_r: 0, led_r: 0, led_g: 0, led_b: 0 };
+const APPROACH_MS = 300;
+// Smoothstep ease (C¹ continuous, 0→1 over 0→1). Used to blend the rig's
+// current pose into a new animation's sampled values over APPROACH_MS so
+// the transition matches how a real robot accelerates into a motion
+// rather than teleporting to the start pose.
+function smoothstep(a) { return a * a * (3 - 2 * a); }
+
 // Drive both the body rig (via window.parent.postMessage 'dofs') and the live
 // eye (jibo.face.eye.display) from animation channel data over `durMs`. Stops
 // when isStopped() returns true. Body DOFs ('*Section_r', 'led_*') go to the
@@ -248,6 +266,14 @@ function startDofPlayback(options, durMs, isStopped, events) {
   const startMs = performance.now();
   const durSec = durMs / 1000;
   const BODY_DOFS = new Set(['bottomSection_r', 'middleSection_r', 'topSection_r', 'led_r', 'led_g', 'led_b']);
+  // Snapshot the rig's current pose (= last body DOFs we posted) as the
+  // approach origin. The first APPROACH_MS of playback ease each body DOF
+  // from this origin → the animation's sampled value via smoothstep, so a
+  // non-zero channel[0] doesn't produce an instantaneous jolt. Eye/screen
+  // DOFs are NOT smoothed — they're already blended on the eye side every
+  // frame (driveEye mixes __activeAnimDofs into the idle pose) and a
+  // 300ms ramp would visibly lag fast saccades.
+  const approachOrigin = Object.assign({}, _lastBodyDofs);
   const tick = () => {
     if (isStopped()) { window.__activeAnimDofs = null; return; }
     const elapsedSec = (performance.now() - startMs) / 1000;
@@ -266,7 +292,20 @@ function startDofPlayback(options, durMs, isStopped, events) {
     for (const k of Object.keys(sampled)) {
       if (BODY_DOFS.has(k)) { bodyDofs[k] = sampled[k]; hasBody = true; }
     }
+    // Ease-in: during the first APPROACH_MS, blend approachOrigin → sampled.
+    const elapsedMs = performance.now() - startMs;
+    if (hasBody && elapsedMs < APPROACH_MS) {
+      const e = smoothstep(elapsedMs / APPROACH_MS);
+      for (const k of Object.keys(bodyDofs)) {
+        const from = (approachOrigin[k] != null) ? approachOrigin[k] : 0;
+        bodyDofs[k] = from + (bodyDofs[k] - from) * e;
+      }
+    }
     if (hasBody) {
+      // Remember what we actually posted so the next animation's
+      // approachOrigin reflects the rig's current pose (mid-blend or
+      // post-blend, doesn't matter — what matters is continuity).
+      for (const k of Object.keys(bodyDofs)) _lastBodyDofs[k] = bodyDofs[k];
       try { window.parent.postMessage({ __jibo: true, kind: 'dofs', dofs: bodyDofs }, '*'); } catch (_) { /* no parent */ }
     }
     // The eye DOFs are mixed into driveEye's per-frame frame so motion stays
