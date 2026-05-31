@@ -1470,96 +1470,76 @@ export function patchBeFramework(requireFn) {
 // the menu/views render naturally, and the EyeView's touch handler
 // reach onTouch -> MainMenu.
 // Install an ambient idle motion driver — the always-on background
-// motion that keeps Jibo feeling alive between (and during) explicit
-// skill behaviors. Two layers:
-//   blinks    — pick from the indexed blinks pool every 3-13s,
-//               matching the on-device "Idle Blink Occasionally" cadence
-//   body sway — continuous slow sinusoidal modulation on the three
-//               body-section rotations, anchored to the last applied
-//               pose so it composes with any animation playing
-// Both go through the same channels explicit skill animations use, so
-// when a skill fires (dance, sing, etc.) its higher-priority playback
-// preempts the sway/blink cleanly.
+// motion that keeps Jibo feeling alive between explicit skill behaviors.
+// Two layers, both using the same APIs the on-device runtime hits:
+//   blinks  — jibo.expression.blink() at random intervals (3-13s, the
+//             same cadence as the on-device "Idle Blink Occasionally"
+//             attention rule). expression.blink() is what the source's
+//             blinker delegate calls.
+//   musings — short canned animations the @be/idle skill ships, queried
+//             by category 'ib' with 'ib-idle-short-time' or 'ib-idle-
+//             long-time' meta. We hit the same playSmallMusing /
+//             playBigMusing methods on the idle skill's circadian
+//             expressor — same query filtering, animation pool, and
+//             playback path the source uses, just on a faster cadence
+//             (the on-device timers fire at minute-scale and are
+//             impractical for a live demo).
+//
+// Gating: musings only fire when the @be/idle skill is the currently
+// active skill. When chitchat or any other skill takes over, musings
+// stop automatically — preventing a "look around" from talking on top
+// of a scripted response.
 export function installIdleMotion(jibo) {
   if (!jibo || jibo.__idleMotionInstalled) return;
   jibo.__idleMotionInstalled = true;
 
   const ex = jibo.expression;
-  const animDB = jibo.animDB;
-
-  // Wait briefly for animDB to be indexed (it loads asynchronously
-  // during plugin init). Without ready animations the first few blink
-  // attempts just no-op.
-  const ready = () => animDB && typeof animDB.query === 'function';
 
   // --- Periodic blinks ---
-  // Cache key matches what the on-device auto-rule manager uses for
-  // blink/comma/question/initiate animations — the bundle pre-caches
-  // those assets under the 'global' cache at boot, so playback hits the
-  // cache instead of going back to disk (and instead of producing the
-  // "Trying to load X but it needs to be cached!" warning every time).
-  const BLINK_CONFIG = { cache: 'global' };
+  // expression.blink() is the canonical API the on-device runtime's
+  // AttentionRuleBlinkOccasionally fires through its blinker delegate.
+  // Our stub forwards it to jibo.face.eye.blink() — the same end call
+  // the on-device expression service makes after the RPC hop.
   function fireBlink() {
-    try {
-      if (ready() && ex && typeof ex.createAndPlayAnimation === 'function') {
-        const res = animDB.query({
-          categories: ['blinks'],
-          includeMeta: [],
-          includeSomeMeta: ['single', 'double'],
-          excludeMeta: ['sfx-only', 'ssa-only'],
-        });
-        const list = (res && res.matching) || [];
-        if (list.length > 0) {
-          const pick = list[Math.floor(Math.random() * list.length)];
-          if (pick && pick.createFromConfig) {
-            Promise.resolve(pick.createFromConfig(BLINK_CONFIG)).then((pb) => pb && pb.play && pb.play({})).catch(() => {});
-          }
-        }
-      }
-    } catch (_) { /* arbiter rejected, try next tick */ }
+    try { if (ex && typeof ex.blink === 'function') Promise.resolve(ex.blink(false)).catch(() => {}); }
+    catch (_) { /* */ }
     setTimeout(fireBlink, 3000 + Math.random() * 10000);   // 3-13s
   }
   setTimeout(fireBlink, 1500 + Math.random() * 2000);
 
-  // --- Body sway ---
-  // Continuous slow oscillation on the three body-section rotations.
-  // Each section gets its own phase + frequency so the motion looks
-  // organic rather than perfectly coherent. Amplitudes are tiny — just
-  // enough that the rig visibly breathes without looking jittery.
-  //
-  // We post body DOFs as deltas added on top of _bodyState.lastApplied,
-  // which is the rig's actual current pose (animation playback updates
-  // it as each frame writes through startDofPlayback). When no anim is
-  // playing, lastApplied is constant and the sway is the only motion;
-  // when an anim IS playing, sway adds a barely-noticeable wobble that
-  // the anim's much-larger motion drowns out.
-  const SWAY = {
-    bottomSection_r: { amp: 0.012, freq: 0.55, phase: 0 },
-    middleSection_r: { amp: 0.020, freq: 0.75, phase: 1.1 },
-    topSection_r:    { amp: 0.025, freq: 0.40, phase: 2.3 },
-  };
-  function swayTick() {
+  // --- Musings ---
+  // Reach into the @be/idle skill's circadian expressor and trigger
+  // small/big musings on a configurable cadence. The expressor runs the
+  // source's full musing pipeline: weighted-random query selection
+  // filtered by holidays + date range + brightness + season, then a
+  // cancellable animation queue that plays the picked asset through
+  // animDB. We just call the entry points faster than the on-device
+  // 10/84-minute timers, gated on idle being the active skill.
+  let useBig = false;
+  function findExpressor() {
+    const be = typeof window !== 'undefined' && window.be;
+    const idle = be && be.skills && be.skills['@be/idle'];
+    const exp = idle && idle.circadianManager && idle.circadianManager.circadianExpression;
+    return (exp && typeof exp.playSmallMusing === 'function') ? { be, idle, exp } : null;
+  }
+  function fireMusing() {
     try {
-      const t = performance.now() / 1000;
-      const dofs = {};
-      let any = false;
-      for (const name of Object.keys(SWAY)) {
-        const s = SWAY[name];
-        const state = _bodyState[name];
-        const base = state ? state.lastApplied : 0;
-        dofs[name] = base + Math.sin(t * 2 * Math.PI * s.freq + s.phase) * s.amp;
-        any = true;
-      }
-      if (any && typeof window !== 'undefined' && window.parent) {
-        window.parent.postMessage({ __jibo: true, kind: 'dofs', dofs }, '*');
+      const ctx = findExpressor();
+      // Only fire when @be/idle is the currently active skill so
+      // musings don't talk over chitchat/etc. playback.
+      if (ctx && ctx.be._currentSkill === '@be/idle') {
+        if (useBig) ctx.exp.playBigMusing();
+        else ctx.exp.playSmallMusing();
+        useBig = !useBig;
       }
     } catch (_) { /* */ }
+    setTimeout(fireMusing, 10000 + Math.random() * 8000);   // 10-18s
   }
-  // 30 Hz sway — fast enough to look smooth, slow enough not to flood
-  // the host bridge.
-  setInterval(swayTick, 33);
+  // First musing fires after a longer initial delay so the boot
+  // animations + first-contact flow have time to settle.
+  setTimeout(fireMusing, 12000 + Math.random() * 4000);
 
-  console.log('[live-eye] idle motion installed (blinks + body sway)');
+  console.log('[live-eye] idle motion installed (blinks + musings)');
 }
 
 export function driveEye(jibo, prep) {
