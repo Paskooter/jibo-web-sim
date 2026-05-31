@@ -30,24 +30,42 @@ export function createViewport(hostEl) {
   controls.minDistance = 0.2;
   controls.maxDistance = 3;
 
-  // Touch devices get single-finger rotate by default — there's no Ctrl key to
-  // gate on, and the most useful camera motion on a phone is tilt + orbit.
-  // Desktop keeps the Ctrl-to-orbit modifier so plain click-drag still
-  // interacts with Jibo's screen (menu scroll etc.). Pinch-zoom (TWO touches
-  // DOLLY_PAN) and wheel-zoom work either way.
+  // Touch gesture model:
+  //   1 finger → no camera motion (the host's pointer handlers route taps and
+  //              drags to Jibo's screen for menu interaction)
+  //   2 fingers → orbit + pinch zoom (DOLLY_ROTATE)
+  //   double-tap-and-hold + drag → camera pan (main.js flips ONE → PAN for
+  //                                the duration of that drag)
+  // Desktop keeps the Ctrl-to-orbit modifier so plain click-drag stays
+  // available for Jibo's screen.
   const isTouchDevice =
     (typeof window !== 'undefined' && 'matchMedia' in window && window.matchMedia('(pointer: coarse)').matches) ||
     (typeof window !== 'undefined' && 'ontouchstart' in window);
-  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  controls.touches = {
+    ONE: null,                       // single finger is reserved for Jibo
+    TWO: THREE.TOUCH.DOLLY_ROTATE,   // pinch zooms + rotates
+  };
 
   let ctrlHeld = false;
   let placementHandler = null;
-  const updateRotate = () => { controls.enableRotate = (isTouchDevice || ctrlHeld) && !placementHandler; };
+  const updateRotate = () => {
+    // On touch we always keep enableRotate true so the TWO-finger gesture
+    // works; ONE is gated by the touches config above.
+    // On desktop we gate the master switch on Ctrl, same as before.
+    controls.enableRotate = (isTouchDevice || ctrlHeld) && !placementHandler;
+  };
   updateRotate();
-  const isOrbitModifier = () => ctrlHeld || isTouchDevice;
+  const isOrbitModifier = () => ctrlHeld;
   window.addEventListener('keydown', (e) => { if (e.key === 'Control') { ctrlHeld = true; updateRotate(); } });
   window.addEventListener('keyup', (e) => { if (e.key === 'Control') { ctrlHeld = false; updateRotate(); } });
   window.addEventListener('blur', () => { ctrlHeld = false; updateRotate(); });
+
+  // Toggle the ONE-finger touch action between 'none' (default — reserved
+  // for Jibo's screen) and 'pan' (enabled briefly during double-tap-and-
+  // hold so the user can drag-pan the camera with one finger).
+  function setOneTouchMode(mode) {
+    controls.touches.ONE = (mode === 'pan') ? THREE.TOUCH.PAN : null;
+  }
 
   // Click-to-place: when a handler is registered we suspend orbit-rotate and
   // turn viewport clicks into a world point ~0.6 m down the camera ray.
@@ -140,6 +158,8 @@ export function createViewport(hostEl) {
     onFrame,
     setPlacement,
     isOrbitModifier,
+    setOneTouchMode,
+    isTouchDevice,
     scene,
     camera,
     renderer,

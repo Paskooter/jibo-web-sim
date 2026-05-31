@@ -381,14 +381,65 @@ async function startSkillRuntime() {
     return (hit && hit.uv) ? { x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 } : null;
   };
   let downX = 0, downY = 0, downT = 0, dragging = false, panned = false, pfx = 0, pfy = 0;
+
+  // Double-tap-and-hold to camera-pan with one finger. Touch only.
+  // The capture-phase handler runs BEFORE the bubble-phase listeners
+  // OrbitControls registered, so toggling viewport.setOneTouchMode('pan')
+  // here means OrbitControls processes the second pointerdown with PAN
+  // already configured and starts panning straight away.
+  let activeTouches = 0;
+  let lastTapEnd = 0;
+  let inDoubleTapHold = false;
+  const DOUBLE_TAP_WINDOW = 350;
+  dom.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    activeTouches += 1;
+    if (activeTouches === 1) {
+      const since = performance.now() - lastTapEnd;
+      if (since > 0 && since < DOUBLE_TAP_WINDOW) {
+        inDoubleTapHold = true;
+        viewport.setOneTouchMode('pan');
+      }
+    } else if (activeTouches >= 2) {
+      // Two-finger gesture started — abandon any pending double-tap state
+      // so a subsequent pinch doesn't trip pan mode on release.
+      lastTapEnd = 0;
+    }
+  }, true);
+  dom.addEventListener('pointerup', (e) => {
+    if (e.pointerType !== 'touch') return;
+    activeTouches = Math.max(0, activeTouches - 1);
+    if (inDoubleTapHold && activeTouches === 0) {
+      inDoubleTapHold = false;
+      viewport.setOneTouchMode('none');
+      lastTapEnd = 0;     // hold consumed the double-tap
+      return;
+    }
+    if (activeTouches === 0) {
+      // Record single-finger tap end so the NEXT pointerdown can pair into
+      // a double-tap. A real drag still leaves lastTapEnd unset because
+      // moving > 6 px during the drag also clears it (handled below).
+      const dx = e.clientX - downX, dy = e.clientY - downY;
+      if (Math.hypot(dx, dy) <= 12 && performance.now() - downT <= DOUBLE_TAP_WINDOW) {
+        lastTapEnd = performance.now();
+      }
+    }
+  }, true);
+  dom.addEventListener('pointercancel', () => {
+    if (inDoubleTapHold) { inDoubleTapHold = false; viewport.setOneTouchMode('none'); }
+    activeTouches = 0;
+    lastTapEnd = 0;
+  }, true);
+
   dom.addEventListener('pointerdown', (e) => {
     downX = e.clientX; downY = e.clientY; downT = performance.now(); dragging = false; panned = false;
-    if (viewport.isOrbitModifier()) return;        // Ctrl held → let the camera orbit
+    if (inDoubleTapHold) return;                   // pan-mode drag — leave Jibo alone
+    if (viewport.isOrbitModifier()) return;        // desktop: Ctrl held → camera orbit
     const f = faceAt(e);
     if (f) { dragging = true; pfx = f.x; pfy = f.y; }
   });
   dom.addEventListener('pointermove', (e) => {
-    if (!dragging || viewport.isOrbitModifier()) return;
+    if (!dragging || viewport.isOrbitModifier() || inDoubleTapHold) return;
     if (!panned && Math.hypot(e.clientX - downX, e.clientY - downY) <= 6) return; // ignore tap jitter
     const f = faceAt(e);
     if (!f) return;
@@ -397,14 +448,14 @@ async function startSkillRuntime() {
     pfx = f.x; pfy = f.y;
   });
   dom.addEventListener('pointerup', (e) => {
+    if (inDoubleTapHold) { dragging = false; panned = false; return; }
     if (dragging && panned) {
       bridge.emit('face', 'pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
     } else if (Math.hypot(e.clientX - downX, e.clientY - downY) <= 6 && performance.now() - downT <= 350) {
       // Tap on the face. Allowed regardless of the orbit modifier state —
       // a single quick tap is always a face touch (used to tap menu items
-      // etc.). The drag case above is what differentiates a tap from an
-      // orbit gesture: a real orbit drag moves more than 6 px before
-      // release, so the tap branch doesn't fire then.
+      // etc.). A real drag moves > 6 px before release, so the tap branch
+      // doesn't fire then.
       const f = faceAt(e);
       if (f) bridge.emit('face', 'touch', f);
     }
