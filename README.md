@@ -45,17 +45,27 @@ The bundle shows up in the picker on the next reload.
 
 ### Importing the rule pack
 
-For offline NLU coverage beyond what the loaded bundle ships, pull the
-[companion rule pack][rule-pack] into `./rules/`. One-liner:
+The [companion rule pack][rule-pack] is fetched automatically as part of
+`npm install` (postinstall hook → `scripts/fetch-rules.js`). It lands in
+`./rules/`. If the directory already has content the script skips, so
+manual or custom rule packs stay put.
+
+Re-fetch any time:
+
+```sh
+npm run fetch-rules
+```
+
+Or skip the automatic fetch — set `SKIP_RULE_FETCH=1` before `npm
+install`, or pull manually with:
 
 ```sh
 curl -sSL https://github.com/Paskooter/jibo-web-sim-rules/archive/refs/heads/main.tar.gz \
   | tar xz -C rules --strip-components=1
 ```
 
-On the next reload, the picker / NLU registry pick the rule files up
-automatically. Same shape works for any other rule pack — just drop the
-tree into `./rules/`.
+Same shape works for any other rule pack — just drop the tree into
+`./rules/`.
 
 [rule-pack]: https://github.com/Paskooter/jibo-web-sim-rules
 
