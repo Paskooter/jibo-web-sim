@@ -30,6 +30,17 @@ live there); they show up in the picker. Open the page, click
 To connect to a cloud backend, enter its host:port in the host UI field
 before starting.
 
+### Unpacking a jibo-be tarball
+
+For a downloaded `jibo-be-12.0.0.tar.gz` (or any other version), unpack
+it under `./skills/jibo-be/`:
+
+```sh
+mkdir -p skills/jibo-be && tar xzf jibo-be-12.0.0.tar.gz -C skills/jibo-be --strip-components=1
+```
+
+The bundle shows up in the picker on the next reload.
+
 ### Importing the rule pack
 
 For offline NLU coverage beyond what the loaded bundle ships, pull the
