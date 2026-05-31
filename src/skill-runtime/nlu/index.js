@@ -95,13 +95,37 @@ export function createRegistry() {
     }
     if (!winner) return null;
     const ent = winner.m.entities || {};
+    const intent = ent.intent || ent.action || '';
+    // NLParse + Input mirror the cloud's jibo-nlu output shape that on-robot
+    // skills read directly off the result object. @be/chitchat InitState
+    // (index.js:909 addEmotionInfo) does `data.asrResult.NLParse.valenceImpact`
+    // — with NLParse undefined the FlowExecutor throws an unhandled rejection
+    // and the bundle hangs in an endless requestAnimationFrame loop. Populate
+    // it from entities + sensible defaults (so jibo.emotion.triggerImpact sees
+    // finite numbers). Tag values like `{valenceImpact='0.5'}` come through
+    // entities as strings; coerce to numbers. `Input` is the raw text the
+    // skill reads for analytics / readback. The cloud puts NLParse alongside
+    // asr/nlu/match (see @be/main-menu/index.js:319+ redirectOptions for the
+    // shape the be skills construct themselves).
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+    const NLParse = Object.assign({}, ent, {
+      intent,
+      mimId: ent.mimId || ent.contentMimID || '',
+      valenceImpact: num(ent.valenceImpact),
+      confidenceImpact: num(ent.confidenceImpact),
+      questionType: ent.questionType || 'null',
+      loopmember: ent.loopmember || null,
+      domain: ent.domain || '',
+    });
     return {
       asr: { text, confidence: 1 },
       nlu: {
         entities: ent,
-        intent: ent.intent || ent.action || '',
+        intent,
         rules: ['launch'],
       },
+      NLParse,
+      Input: text,
       match: {
         skillID: ent.skill || winner.skill.skillID,
         launch: true,

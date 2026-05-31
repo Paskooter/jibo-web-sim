@@ -140,10 +140,24 @@ export function localParse(text) {
   for (const entry of INTENTS) {
     if (entry.match.test(target)) {
       const entities = Object.assign({}, COMMON_NULL_ENTITIES, entry.entities || {});
+      // NLParse + Input — same reason as in nlu/index.js. Chitchat and a few
+      // other on-robot skills read these directly off the result; without them
+      // InitState crashes on `valenceImpact` and hangs the bundle.
+      const NLParse = Object.assign({}, entities, {
+        intent: entry.intent,
+        mimId: entities.mimId || '',
+        valenceImpact: 0,
+        confidenceImpact: 0,
+        questionType: entities.questionType || 'null',
+        loopmember: null,
+        domain: entities.domain || '',
+      });
       return {
         asr: { text: trimmed, confidence: 1 },
         nlu: { entities, intent: entry.intent, rules: ['launch'] },
         match: { skillID: entry.skillID, launch: true, onRobot: true },
+        NLParse,
+        Input: trimmed,
       };
     }
   }

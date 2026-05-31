@@ -901,6 +901,32 @@ export function installExpressionStubs(jibo, requireFn) {
 // host ports in the 9000+ range; 8080 is internal-network only). cjs-require's
 // fake-ws passthrough routes that URL to a real browser WebSocket. Local Pegasus
 // has auth disabled by default, so no webTokenSecret is needed here.
+// jetstream-client ListenResult.fromJSON (jetstream-client.js:1200) only
+// preserves asr/nlu/match/transID. The on-robot @be/* skills (notably chitchat
+// InitState.addEmotionInfo at chitchat/index.js:909) read `data.asrResult
+// .NLParse.X` and `data.asrResult.Input` directly — fields the cloud's intent
+// router populates from entity tags in the matched rule. Our local NLU
+// registry stamps both, GlobalManager._serializeResult passes them through,
+// and this patch makes ListenResult.fromJSON carry them past the bundle-side
+// JSON round-trip so chitchat doesn't crash with `Cannot read properties of
+// undefined (reading 'valenceImpact')` and hang the FlowExecutor.
+function patchListenResultFromJSON(js) {
+  try {
+    const LR = js && js.types && js.types.ListenResult;
+    if (!LR || typeof LR.fromJSON !== 'function' || LR.__nluFieldsPatched) return;
+    const orig = LR.fromJSON.bind(LR);
+    LR.fromJSON = function patchedFromJSON(json) {
+      const out = orig(json);
+      if (out && json) {
+        if (json.NLParse !== undefined) out.NLParse = json.NLParse;
+        if (json.Input !== undefined) out.Input = json.Input;
+      }
+      return out;
+    };
+    LR.__nluFieldsPatched = true;
+  } catch (_) { /* */ }
+}
+
 export function connectCloud(requireFn) {
   const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
   try {
@@ -924,8 +950,10 @@ export function connectCloud(requireFn) {
                         createChild: () => noopLog };
       try { Promise.resolve(api.init({ hostname: '127.0.0.1', port: 0 }, noopLog)).catch(() => {}); }
       catch (_) { /* */ }
+      patchListenResultFromJSON(js);
       return;
     }
+    patchListenResultFromJSON(js);
 
     // Track the active MIM Listen request. When a skill (e.g. @be/friendly-tips
     // in its `wanna see more?` MIM) opens a Listen with non-launch rules, the

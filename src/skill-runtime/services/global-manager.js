@@ -285,6 +285,14 @@ export class GlobalManagerService {
       // pass through optional fields the cloud may stamp
       transID: result.transID,
       state: result.state,
+      // NLParse + Input mirror the jibo-nlu output shape that on-robot
+      // skills read directly (e.g. @be/chitchat InitState.addEmotionInfo
+      // hits `data.asrResult.NLParse.valenceImpact`). They survive the
+      // JSON round-trip only if both this serializer AND the bundle-side
+      // ListenResult.fromJSON preserve them; boot.js monkey-patches the
+      // latter (see patchListenResultFromJSON).
+      NLParse: result.NLParse || null,
+      Input: result.Input || (result.asr && result.asr.text) || '',
     };
   }
 
