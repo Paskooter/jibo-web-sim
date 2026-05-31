@@ -203,9 +203,19 @@ function sampleChannel(times, values, t) {
   if (t >= times[n - 1]) return values[n - 1];
   let i = 1;
   while (i < n && times[i] < t) i++;
+  const v0 = values[i - 1];
+  const v1 = values[i];
+  // Step-interpolate non-numeric channels (e.g. texture-infix DOFs like
+  // eyeTextureInfixBn_r whose values are texture PATH STRINGS — doc 08:
+  // "*TextureInfixBn_r are file-paths-as-DOFs"). Linear interp on strings
+  // produces NaN, breaks Eye.set texturePath, and the coin-flip / JiboJi
+  // texture swaps never apply → hollow eye visible. Hold the previous
+  // keyframe's value until the next keyframe, matching what animation-
+  // utilities does internally for non-metric DOFs.
+  if (typeof v0 !== 'number' || typeof v1 !== 'number') return v0;
   const t0 = times[i - 1], t1 = times[i];
   const a = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
-  return values[i - 1] + (values[i] - values[i - 1]) * a;
+  return v0 + (v1 - v0) * a;
 }
 
 // Per-body-DOF motion state — port of animation-utilities'
