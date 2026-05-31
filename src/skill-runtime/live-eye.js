@@ -9,6 +9,15 @@
 //   - driveEye(): stream a sampled idle pose into the real PixiJS eye so it
 //     renders instead of staying blank.
 
+import { DOFArbiter } from './dof-arbiter.js';
+
+// Singleton — initialized in installExpressionStubs once robotInfo is available
+// (we need the DOF universe to seed OwnershipInformation entries). All animation
+// playback through createAnimation/createAndPlayAnimation runs through this so
+// the priority policy (BargeIn > EmbodiedListen > Behavior/EmbodiedSpeech > etc.)
+// actually preempts active animations instead of stacking them.
+export const dofArbiter = new DOFArbiter();
+
 // The DOFSet group names the expression client builds (jibo-expression-client DOFs.js).
 const DOF_SET_NAMES = [
   'ALL', 'BASE', 'BODY', 'EYE', 'LED', 'OVERLAY', 'SCREEN',
@@ -319,7 +328,7 @@ function startDofPlayback(options, durMs, isStopped, events) {
   requestAnimationFrame(tick);
 }
 
-function makeAnimInstance(requireFn, play, options) {
+function makeAnimInstance(requireFn, play, options, requestor) {
   let Event;
   try { Event = requireFn('jibo-typed-events').Event; } catch (_) { /* fall back to local emitter */ }
   const events = {};
@@ -328,30 +337,93 @@ function makeAnimInstance(requireFn, play, options) {
   }
   let stopped = false;
   let started = false;
+  let cancelled = false;
   let raf = 0;
-  const emitStopped = () => {
+  // Stable identity for the arbiter — _instanceToDOF keys on this object.
+  const arbiterInstance = {};
+  // Channel DOF names — what this animation will try to claim. Computed
+  // once so emitStopped/preemption can release them via the arbiter.
+  const channelDofs = (() => {
+    const data = options && options.data;
+    const channels = (data && data.content && Array.isArray(data.content.channels)) ? data.content.channels : null;
+    if (!channels) return [];
+    const out = [];
+    for (const c of channels) { const n = c.dofName || c.dof; if (n) out.push(n); }
+    return out;
+  })();
+  const emitStopped = (reason) => {
     if (stopped) return;
     stopped = true;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    try { events.stopped.emit(); } catch (_) { /* no listener */ }
+    // Release DOFs to the arbiter so the next animation can claim them
+    // (matches DOFArbiter.ts:785 STOPPED/CANCELLED → TIMED_RELEASE).
+    try { dofArbiter.releaseInstance(arbiterInstance); } catch (_) { /* arbiter not inited */ }
+    try {
+      if (reason === 'cancelled') {
+        cancelled = true;
+        events.cancelled.emit();
+      }
+      events.stopped.emit();
+    } catch (_) { /* no listener */ }
   };
+  // Arbiter listener — when a HIGHER-priority requester acquires any of
+  // OUR channel DOFs, the arbiter calls dofsLost(ourRequester, lostDofs).
+  // If anything we own gets taken, this animation is preempted. Mirrors
+  // the real expression service's behavior where the new playAnimation
+  // call interrupts ours via the global ADDED → markInUseByInstance flow.
+  const arbiterListener = {
+    dofsLost: (owner, lost) => {
+      if (stopped || !started) return;
+      // Only react if any of OUR channels were taken — the arbiter
+      // notifies us about anything we owned, including DOFs we hadn't
+      // started writing yet (e.g. peripheral channels intersected by
+      // another requester).
+      let taken = false;
+      for (const d of lost) { if (channelDofs.indexOf(d) >= 0) { taken = true; break; } }
+      if (taken) emitStopped('cancelled');
+    },
+    dofsGained: () => {},
+    dofsAvailable: () => {},
+  };
+  if (requestor) {
+    try { dofArbiter.addListener(requestor, arbiterListener); } catch (_) { /* */ }
+  }
   // Start (or restart) playback: emit `started`, schedule `stopped` for the
   // computed real duration, and kick off body+eye DOF sampling. Used both by
   // the createAndPlayAnimation initial-play (play=true) and the createAnimation
   // + instance.play(...) deferred-play path (where the skill drives playback
   // explicitly after acquiring the instance — most embodied-dialog timelines
   // take this path).
-  const startPlayback = () => {
+  const startPlayback = (playRequestor) => {
     if (started || stopped) return;
+    // Arbitrate before we mark started — if the policy says we can't
+    // have ANY of our channels (with allOrNothing), reject without
+    // touching __activeAnimDofs. Mirrors AnimationInstance.play() at
+    // /tmp/sdk/.../expression/AnimationInstance.ts:35-50: PlayStatus
+    // REJECTED → emit REJECTED event, return without playing.
+    const useReq = playRequestor || requestor || 'Behavior';
+    const allowed = (channelDofs.length > 0)
+      ? dofArbiter.attemptToClaimForInstance(useReq, arbiterInstance, channelDofs, { allOrNothing: true })
+      : [];
+    if (channelDofs.length > 0 && allowed.length === 0) {
+      // Rejected — same surface as the real expression service:
+      // delay REJECTED to the next tick so the play() reply lands first,
+      // then mark as stopped without firing started/stopped pairs.
+      stopped = true;
+      try { dofArbiter.removeListener(useReq, arbiterListener); } catch (_) { /* */ }
+      setTimeout(() => { try { events.rejected.emit(); } catch (_) { /* */ } }, 0);
+      console.log('[live-eye] anim REJECTED by arbiter (req=' + useReq + ', wanted ' + channelDofs.length + ' dofs)');
+      return;
+    }
     started = true;
     const dataObj = options && options.data;
     const channels = (dataObj && dataObj.content && Array.isArray(dataObj.content.channels)) ? dataObj.content.channels : null;
     const channelCount = channels ? channels.length : 0;
-    const channelDofs = channels ? channels.slice(0, 6).map((c) => c.dofName || c.dof).join(',') : '';
+    const summary = channels ? channels.slice(0, 6).map((c) => c.dofName || c.dof).join(',') : '';
     Promise.resolve().then(() => { try { events.started.emit(); } catch (_) { /* no listener */ } });
     const dur = animDurationMs(options);
-    console.log('[live-eye] anim play: src=', (options && options.src) || '<inline>', 'dur=', dur, 'ms ch=', channelCount, channelCount ? '(' + channelDofs + (channels.length > 6 ? ',...' : '') + ')' : '');
-    setTimeout(emitStopped, dur);
+    console.log('[live-eye] anim play: req=' + useReq + ' src=', (options && options.src) || '<inline>', 'dur=', dur, 'ms ch=', channelCount, channelCount ? '(' + summary + (channels.length > 6 ? ',...' : '') + ')' : '');
+    setTimeout(() => emitStopped(), dur);
     // Sample the animation's channels per frame and drive both the host body rig
     // (postMessage 'dofs' for body sections + LED ring) and the local eye (push
     // DOFs into jibo.face.eye.display). options.data is the same shape
@@ -362,17 +434,23 @@ function makeAnimInstance(requireFn, play, options) {
     // fire at the right beat.
     startDofPlayback(options, dur, () => stopped, events);
   };
-  if (play) startPlayback();
+  if (play) startPlayback(requestor);
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
     get(t, p) {
       if (p === 'events') return events;
-      if (p === 'state') return 'INVALID';
+      if (p === 'state') return cancelled ? 'CANCELLED' : (stopped ? 'STOPPED' : (started ? 'PLAYING' : 'INVALID'));
       if (p === 'then' || typeof p === 'symbol') return undefined;
-      // Real AnimationInstance.play() begins playback; do the same here for
-      // animations created via createAnimation() and played explicitly.
-      if (p === 'play') return () => { startPlayback(); return Promise.resolve(); };
-      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => { emitStopped(); return Promise.resolve(); };
+      // Real AnimationInstance.play(requestor) begins playback; same here for
+      // animations created via createAnimation() and played explicitly. The
+      // bundle passes a requestor string (jibo-expression-client.AnimationInstance.play
+      // line 59 — default 'Behavior'); thread it into the arbiter call.
+      if (p === 'play') return (req) => { startPlayback(req || requestor); return Promise.resolve(stopped && !started ? 'REJECTED' : 'OK'); };
+      if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => {
+        emitStopped(p === 'cancel' ? 'cancelled' : undefined);
+        if (requestor) { try { dofArbiter.removeListener(requestor, arbiterListener); } catch (_) { /* */ } }
+        return Promise.resolve();
+      };
       if (typeof p === 'string' && PROMISE_RETURNING_METHODS.has(p)) return () => Promise.resolve();
       if (p === 'completed' || p === 'cancelled' || p === 'finished' || p === 'started') return Promise.resolve();
       return tolerant();
@@ -399,9 +477,45 @@ export function installExpressionStubs(jibo, requireFn) {
     const ex = jibo && jibo.expression;
     if (!ex || ex.__stubbed) return;
     ex.__stubbed = true;
+    // Initialize the DOFArbiter against the bundle's robot DOF universe.
+    // The expression service does this in ExpressionService.initDOFArbiter
+    // (using its own animate.getRobotInfo()); we use the same RobotInfo
+    // populateExpressionDofs already built (jibo.expression.dofs.ALL is
+    // a DOFSet whose getDOFs() lists every DOF, equivalent to the source's
+    // getRobotInfo().getDOFNames()).
+    try {
+      let dofNames = [];
+      const all = ex.dofs && ex.dofs.ALL;
+      if (all && typeof all.getDOFs === 'function') dofNames = all.getDOFs();
+      if (dofNames.length > 0) {
+        dofArbiter.init(dofNames);
+        console.log('[live-eye] DOFArbiter initialized with', dofNames.length, 'DOFs');
+      } else {
+        console.log('[live-eye] DOFArbiter NOT initialized: no DOF universe (jibo.expression.dofs.ALL empty)');
+      }
+    } catch (e) { console.warn('[live-eye] DOFArbiter init failed:', e.message); }
     for (const m of EXPRESSION_METHODS) {
       if (typeof ex[m] === 'function' || ex[m] === undefined) ex[m] = () => Promise.resolve(tolerant());
     }
+    // Replace centerRobot with one that routes through the arbiter.
+    // Real impl (Expression.ts:267-284): dofArbiter.centerRobot(requestor,
+    // dofs, centerGlobally, cb). Skills pass options.{requestor, dofs,
+    // centerGlobally}.
+    ex.centerRobot = (opts = {}) => new Promise((resolve) => {
+      try {
+        const req = opts.requestor || 'Behavior';
+        const dofSet = opts.dofs && opts.dofs.getDOFs ? opts.dofs : null;
+        dofArbiter.centerRobot(req, dofSet, !!opts.centerGlobally, () => resolve());
+      } catch (_) { resolve(); }
+    });
+    ex.cleanup = (opts = {}) => new Promise((resolve) => {
+      try {
+        const req = opts.requestor || 'Behavior';
+        const trustee = opts.trustee || 'Cleanup';
+        const dofSet = opts.dofs && opts.dofs.getDOFs ? opts.dofs : null;
+        dofArbiter.centerWithHybridPriority(req, trustee, dofSet, opts.owners || null, false, () => resolve());
+      } catch (_) { resolve(); }
+    });
     // Diagnostic: log every animation instance creation so we can tell which
     // anim tags get through resolveAssetToPlayback. Helpful for tracking down
     // missing dance/etc. anims — if a `<anim cat='dance' ...>` produces no
@@ -413,13 +527,16 @@ export function installExpressionStubs(jibo, requireFn) {
       const ch = data && data.content && Array.isArray(data.content.channels) ? data.content.channels.length : '-';
       return `src=${src} ch=${ch}`;
     };
-    ex.createAnimation = (opts) => {
-      console.log('[live-eye] createAnimation:', summarize(opts));
-      return Promise.resolve(makeAnimInstance(requireFn, false, opts));
+    // Both createAnimation and createAndPlayAnimation take the requestor as
+    // their second arg (jibo-expression-client.js:253 / Expression.ts:97-109).
+    // Default 'Behavior' matches AnimationInstance.play()'s default.
+    ex.createAnimation = (opts, requestor = 'Behavior') => {
+      console.log('[live-eye] createAnimation:', summarize(opts), 'req=' + requestor);
+      return Promise.resolve(makeAnimInstance(requireFn, false, opts, requestor));
     };
-    ex.createAndPlayAnimation = (opts) => {
-      console.log('[live-eye] createAndPlayAnimation:', summarize(opts));
-      return Promise.resolve(makeAnimInstance(requireFn, true, opts));
+    ex.createAndPlayAnimation = (opts, requestor = 'Behavior') => {
+      console.log('[live-eye] createAndPlayAnimation:', summarize(opts), 'req=' + requestor);
+      return Promise.resolve(makeAnimInstance(requireFn, true, opts, requestor));
     };
     // events/features are normally set during the (skipped) expression init.
     if (!ex.events) ex.events = { dofs: { on() {}, off() {} }, kinematics: { on() {}, off() {} } };
