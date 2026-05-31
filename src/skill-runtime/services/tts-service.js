@@ -96,9 +96,9 @@ function _speakViaHost(prompt) {
 // We preserve the markers by replacing the relevant tags with sentinel
 // strings BEFORE the tag-stripping pass, then re-expanding them into named
 // tokens with their own time slot during tokenization.
-const _MARK_BREAK = 'BREAK';
-const _MARK_AUDIO = 'AUDIO';
-const _MARK_SAYAS = 'SAYAS';
+const _MARK_BREAK = 'BREAK';
+const _MARK_AUDIO = 'AUDIO';
+const _MARK_SAYAS = 'SAYAS';
 function _markupForTiming(text) {
   return String(text == null ? '' : text)
     .replace(/<break\b[^>]*\/?>/gi, ` ${_MARK_BREAK} `)
@@ -109,21 +109,55 @@ function _markupForTiming(text) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+// Tokenize a plain-text prompt into per-word + per-punctuation tokens.
+// The embodied-dialog NL parser detects sentence ends and connectors from
+// individual punctuation tokens (`.`, `?`, `!`, `;`, `:`, `,`), so each
+// HAS to come through as its own array entry. Without that split, the
+// parser sees one giant word — no sentence structure builds, no per-word
+// auto-rules (Beat, Blink, Comma, Question, Or, But, ...) fire, and the
+// bundle speaks completely stiff.
+function _lexTokens(text) {
+  return String(text == null ? '' : text)
+    .replace(/([,.?!;:])/g, ' $1 ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+// Conjunctions the NL parser flags as CC tokens. CC entries become PART
+// boundaries inside a sentence, which is what the Or/But/List/Noun
+// structure rules and the phrase-level beat timing anchor against.
+const _CC_WORDS = new Set(['and', 'or', 'but', 'so', 'yet', 'nor', 'for']);
+function _posTag(token) {
+  if (/^[,.?!;:]$/.test(token)) return token;
+  if (_CC_WORDS.has(token.toLowerCase())) return 'CC';
+  return 'NN';
+}
+
 function _tokenTimes(prompt) {
+  // Marker substitution first so the floating-punctuation regex below
+  // doesn't break the BREAK/AUDIO/SAYAS sentinels.
   const marked = _markupForTiming(prompt);
-  const words = marked.split(/\s+/).filter(Boolean);
+  const tokens = [];
   let t = 0;
-  const tokens = words.map((w) => {
-    let name;
-    let dur;
-    if (w === _MARK_BREAK) { name = '<break>'; dur = 0.3; }
-    else if (w === _MARK_AUDIO) { name = '<audioBreak>'; dur = 0.3; }
-    else if (w === _MARK_SAYAS) { name = '<say-as>'; dur = 0.15; }
-    else { name = w; dur = Math.max(0.15, w.length * 0.06); }
-    const tok = { name, start: t, end: t + dur };
-    t += dur;
-    return tok;
-  });
+  // Split on the markers to keep them intact; for the rest, run the
+  // SAME tokenizer as /tts_lex so wordSchedule matches up by value
+  // equality against the parser's word nodes.
+  const raw = marked.split(/(BREAK|AUDIO|SAYAS)/);
+  for (const chunk of raw) {
+    if (!chunk) continue;
+    if (chunk === _MARK_BREAK) { tokens.push({ name: '<break>', start: t, end: t + 0.3 }); t += 0.3; continue; }
+    if (chunk === _MARK_AUDIO) { tokens.push({ name: '<audioBreak>', start: t, end: t + 0.3 }); t += 0.3; continue; }
+    if (chunk === _MARK_SAYAS) { tokens.push({ name: '<say-as>', start: t, end: t + 0.15 }); t += 0.15; continue; }
+    for (const w of _lexTokens(chunk)) {
+      // Punctuation gets a brief pause; words scale with length, capped so a
+      // long compound doesn't blow up the schedule.
+      const dur = /^[,.?!;:]$/.test(w) ? 0.12 : Math.min(0.55, Math.max(0.18, w.length * 0.07));
+      tokens.push({ name: w, start: t, end: t + dur });
+      t += dur;
+    }
+  }
   if (!tokens.length) tokens.push({ name: '/pau/', start: 0, end: 0.1 });
   return { tokens };
 }
@@ -134,18 +168,20 @@ export const ttsService = {
   handleHttp(method, path, body) {
     let b = {};
     try { b = typeof body === 'string' ? JSON.parse(body) : (body || {}); } catch (_) { /* leave empty */ }
-    // POS tagger contract — the lexer turns the prompt into tokens for the
-    // embodied-dialog NLParser. The whole utterance as a single token is OK
-    // because NLParser.split only splits on whitespace from the value itself.
+    // Word + punctuation tokens for the NL parser. Each comma / period /
+    // question mark / exclamation comes through as its own array entry so
+    // the parser can detect sentence ends and connectors. Result shape
+    // matches the on-device contract: { tokens: string[] }.
     if (/\/tts_lex/.test(path)) {
-      return { status: 200, body: { tokens: b.text ? [String(b.text)] : [] } };
+      return { status: 200, body: { tokens: _lexTokens(b.text) } };
     }
-    // POS tags — embodied-dialog forEach's [word, pos] pairs; we don't have a
-    // POS model in-browser, default everything to NN (noun). Conjunctions and
-    // verbs would change prosody marks; for our purposes prosody is unused.
+    // POS tags. No real POS model in-browser, so default content words to
+    // NN, flag conjunctions as CC (the parser uses CC entries as PART
+    // boundaries inside a sentence), and pass punctuation through as its
+    // own POS so the parser recognises sentence ends.
     if (/\/tts_pos_tagging/.test(path)) {
       const tokens = Array.isArray(b.tokens) ? b.tokens : [];
-      return { status: 200, body: { tokentags: tokens.map((t) => [String(t), 'NN']) } };
+      return { status: 200, body: { tokentags: tokens.map((t) => [String(t), _posTag(String(t))]) } };
     }
     // Per-word timings — the schedule the rest of the pipeline aligns to.
     if (/\/tts_token_times/.test(path)) {
