@@ -3,4 +3,7 @@ node_modules/
 .cache/
 .vscode/
 *.log
-docs/session-handoff.md
+
+# User-supplied launch rule pack — drop a tree here and it's auto-discovered
+rules/*
+!rules/.gitkeep
