@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 // Pegasus hub auth: it accepts a Bearer JWT signed with HS256 using
 // process.env.ETCO_server_webTokenSecret. The default dev/local secret +
@@ -120,6 +120,11 @@ app.get('/__list', (req, res) => {
   } else {
     res.json({ files: [] }); return;
   }
+  // Files are { url, size } so the browser shim can satisfy fstat() WITHOUT
+  // pre-fetching every file body. chitchat's postInit walks ~3900 mim files
+  // via FileUtils.findAllFilesWithExt and only checks isFile/isDirectory —
+  // sending sizes here lets open() return a lazy fd whose body is fetched
+  // only on first read.
   const files = [];
   const walk = (absDir, urlDir) => {
     let entries;
@@ -127,7 +132,11 @@ app.get('/__list', (req, res) => {
     for (const e of entries) {
       const url = `${urlDir}/${e.name}`;
       if (e.isDirectory()) walk(join(absDir, e.name), url);
-      else files.push(url);
+      else {
+        let size = 0;
+        try { size = statSync(join(absDir, e.name)).size; } catch (_) { /* keep 0 */ }
+        files.push({ url, size });
+      }
     }
   };
   walk(baseAbs, root.replace(/\/$/, ''));

@@ -47,11 +47,12 @@ export function createRequire(jibo) {
     ws: makeFakeWs(),
   };
 
-  // File manifest: a Set of every URL under the skill dir, fetched once. Module
-  // resolution checks this instead of probing each candidate path over XHR — every
-  // missing probe is a console "Failed to load resource" 404, and resolving the
-  // real jibo runtime makes thousands of them. With the manifest, only files that
-  // actually exist are ever fetched.
+  // File manifest: a Map of every URL → byte-size under the skill dir, fetched
+  // once. Module resolution checks this instead of probing each candidate path
+  // over XHR — every missing probe is a console "Failed to load resource" 404,
+  // and resolving the real jibo runtime makes thousands of them. With the
+  // manifest, only files that actually exist are ever fetched, and the sizes
+  // let the fd shim satisfy fstat() without pre-fetching every file body.
   function loadManifest() {
     if (typeof window === 'undefined') return null;
     if (window.__skillManifest) return window.__skillManifest;
@@ -63,7 +64,12 @@ export function createRequire(jibo) {
       xhr.send(null);
       if (xhr.status >= 200 && xhr.status < 300) {
         const list = JSON.parse(xhr.responseText).files || [];
-        window.__skillManifest = new Set(list);
+        const map = new Map();
+        for (const e of list) {
+          if (typeof e === 'string') map.set(e, 0);
+          else if (e && e.url) map.set(e.url, e.size || 0);
+        }
+        window.__skillManifest = map;
         return window.__skillManifest;
       }
     } catch (_) { /* fall back to probing */ }
@@ -319,7 +325,10 @@ function makeHttpFs() {
     syncCache.set(key, out);
     return out;
   }
-  function existsSync(p) { return getSync(mapUrl(p), false) !== null; }
+  function existsSync(p) {
+    const u = mapUrl(p);
+    return getSync(u, false) !== null || isDirInManifest(u);
+  }
   function readFileSync(p, opts) {
     const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
     const url = mapUrl(p);
@@ -331,21 +340,67 @@ function makeHttpFs() {
   }
   // fd-based reads (jibo-cai-utils.FileUtils.readFile opens, fstats, chunk-reads,
   // closes — used to load the 1MB AnimDB). open fetches the whole file once.
+  // Directory paths get a marker fd so fstat reports isDirectory()=true — this
+  // is what FileUtils.findAllFilesWithExt uses to walk into subdirs (chitchat
+  // populates its scriptedResponseMiMSet that way at postInit).
   const fds = new Map();
   let fdSeq = 1;
+  function isDirInManifest(url) {
+    const m = typeof window !== 'undefined' && window.__skillManifest;
+    if (!m) return false;
+    if (m.has(url)) return false;
+    const prefix = url.endsWith('/') ? url : url + '/';
+    for (const entry of m) { if (entry.startsWith(prefix)) return true; }
+    return false;
+  }
   function open(p, flags, mode, cb) {
     if (typeof mode === 'function') { cb = mode; mode = undefined; }
     if (typeof flags === 'function') { cb = flags; flags = 'r'; }
     const u0 = mapUrl(p);
+    if (isDirInManifest(u0)) {
+      const fd = fdSeq; fdSeq += 1; fds.set(fd, { __dir: true }); cb(null, fd); return;
+    }
+    // Lazy fd for in-manifest files: defer the body fetch until the first
+    // read. chitchat's postInit walks ~3900 mim files via fs.open + fstat +
+    // close just to discriminate files from directories; eagerly fetching
+    // every body wasted ~16 MB. fstat satisfies size from the manifest;
+    // read fetches lazily on first call.
+    const m = typeof window !== 'undefined' && window.__skillManifest;
+    if (m && m.has(u0)) {
+      const fd = fdSeq; fdSeq += 1;
+      fds.set(fd, { __lazyUrl: u0, __size: m.get(u0) || 0 });
+      cb(null, fd);
+      return;
+    }
     if (knownMissing(u0)) { const e = new Error(`ENOENT: ${u0}`); e.code = 'ENOENT'; cb(e); return; }
     fetch(u0).then((r) => { if (!r.ok) throw new Error(`ENOENT ${r.status}`); return r.arrayBuffer(); })
       .then((b) => { const fd = fdSeq; fdSeq += 1; fds.set(fd, new Uint8Array(b)); cb(null, fd); })
       .catch((e) => cb(e));
   }
-  function fstat(fd, cb) { const u = fds.get(fd); if (!u) return cb && cb(new Error('EBADF')); return cb && cb(null, { size: u.length, isFile: () => true, isDirectory: () => false }); }
+  function fstat(fd, cb) {
+    const u = fds.get(fd);
+    if (!u) return cb && cb(new Error('EBADF'));
+    if (u.__dir) return cb && cb(null, { size: 0, isFile: () => false, isDirectory: () => true });
+    if (u.__lazyUrl) return cb && cb(null, { size: u.__size, isFile: () => true, isDirectory: () => false });
+    return cb && cb(null, { size: u.length, isFile: () => true, isDirectory: () => false });
+  }
   function read(fd, buffer, offset, length, position, cb) {
     const u = fds.get(fd);
     if (!u) return cb && cb(new Error('EBADF'));
+    if (u.__dir) return cb && cb(new Error('EISDIR'));
+    if (u.__lazyUrl) {
+      // First read on a lazy fd: fetch the body, replace the entry with the
+      // bytes, and re-dispatch through the buffered path.
+      const url = u.__lazyUrl;
+      fetch(url).then((r) => { if (!r.ok) throw new Error(`ENOENT ${r.status}`); return r.arrayBuffer(); })
+        .then((b) => {
+          const bytes = new Uint8Array(b);
+          fds.set(fd, bytes);
+          read(fd, buffer, offset, length, position, cb);
+        })
+        .catch((e) => cb && cb(e));
+      return;
+    }
     const pos = position == null ? 0 : position;
     const end = Math.min(pos + length, u.length);
     let n = 0;
@@ -358,15 +413,55 @@ function makeHttpFs() {
     readFileSync,
     existsSync,
     exists: (p, cb) => cb && cb(existsSync(p)),
-    statSync: (p) => { if (!existsSync(p)) { const e = new Error(`ENOENT: ${p}`); e.code = 'ENOENT'; throw e; } return { isFile: () => true, isDirectory: () => false, size: 0 }; },
-    stat: (p, cb) => cb && cb(null, { isFile: () => true, isDirectory: () => false, size: 0 }),
+    statSync: (p) => {
+      const u = mapUrl(p);
+      if (isDirInManifest(u)) return { isFile: () => false, isDirectory: () => true, size: 0 };
+      if (!existsSync(p)) { const e = new Error(`ENOENT: ${p}`); e.code = 'ENOENT'; throw e; }
+      return { isFile: () => true, isDirectory: () => false, size: 0 };
+    },
+    stat: (p, cb) => {
+      const u = mapUrl(p);
+      if (isDirInManifest(u)) return cb && cb(null, { isFile: () => false, isDirectory: () => true, size: 0 });
+      return cb && cb(null, { isFile: () => true, isDirectory: () => false, size: 0 });
+    },
     // fs-extra extras (jibo-log etc. call these for log dirs); no real FS, so no-op.
     ensureDirSync: () => {}, ensureDir: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     ensureFileSync: () => {}, mkdirpSync: () => {}, mkdirp: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     outputFile: (p, d, cb) => { if (cb) cb(null); }, outputFileSync: () => {}, removeSync: () => {}, remove: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     open, fstat, read, close,
-    readdir: (p, cb) => { const f = typeof cb === 'function' ? cb : (typeof p === 'function' ? p : null); if (f) f(null, []); },
-    readdirSync: () => [],
+    // readdir / readdirSync walk the manifest. Used by jibo-cai-utils
+    // FileUtils.findAllFilesWithExt to populate chitchat's scripted /
+    // emotion mim sets at postInit (chitchat/index.js:329-332). Without
+    // this the sets stayed empty and every scripted-response lookup missed
+    // even when the rule produced the right mim ID.
+    readdir: (p, cb) => {
+      const f = typeof cb === 'function' ? cb : (typeof p === 'function' ? p : null);
+      if (!f) return;
+      const m = typeof window !== 'undefined' && window.__skillManifest;
+      if (!m) { f(null, []); return; }
+      const url = mapUrl(p);
+      const prefix = url.endsWith('/') ? url : url + '/';
+      const seen = new Set();
+      for (const entry of m) {
+        if (!entry.startsWith(prefix)) continue;
+        const name = entry.slice(prefix.length).split('/')[0];
+        if (name) seen.add(name);
+      }
+      f(null, Array.from(seen));
+    },
+    readdirSync: (p) => {
+      const m = typeof window !== 'undefined' && window.__skillManifest;
+      if (!m) return [];
+      const url = mapUrl(p);
+      const prefix = url.endsWith('/') ? url : url + '/';
+      const seen = new Set();
+      for (const entry of m) {
+        if (!entry.startsWith(prefix)) continue;
+        const name = entry.slice(prefix.length).split('/')[0];
+        if (name) seen.add(name);
+      }
+      return Array.from(seen);
+    },
     writeFile: (p, d, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); },
     writeFileSync: () => {}, appendFile: (p, d, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); }, appendFileSync: () => {},
     unlink: (p, cb) => cb && cb(null), unlinkSync: () => {}, mkdir: (p, o, cb) => { const f = typeof o === 'function' ? o : cb; if (f) f(null); }, mkdirSync: () => {},
