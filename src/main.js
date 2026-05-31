@@ -148,11 +148,20 @@ viewport.rig.ready
   .then(() => {
     statusEl.textContent = `three.js r${viewport.threeRevision} · click Start`;
     showStartGate();
+    // Joke mode: from the console, JIBO_WRITHE(n) inserts n extra body
+    // segments between the middle and top sections, each writhing on its
+    // own sinusoid. Reload to undo. JIBO_WRITHE() with no arg defaults to
+    // 10 segments — a satisfyingly horrifying baseline.
+    window.JIBO_WRITHE = (n = 10) => viewport.rig.writhe(n);
   })
   .catch((err) => {
     console.error('Jibo model load failed:', err);
     statusEl.textContent = `three.js r${viewport.threeRevision} · model load FAILED — see console`;
   });
+
+// Drive the per-segment writhing oscillation. No-op when JIBO_WRITHE
+// hasn't been invoked yet (rig.tickWrithe walks an empty list).
+viewport.onFrame(() => viewport.rig.tickWrithe(performance.now() / 1000));
 
 // A "power-on" gate: browsers block audio until the user interacts with the
 // page, so an autoplayed greeting would be silent. The click both unlocks

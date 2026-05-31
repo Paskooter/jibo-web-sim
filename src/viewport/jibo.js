@@ -112,6 +112,66 @@ export function createJiboRig(scene) {
     setScreenHex(0x12161c);
   }
 
+  // --- Writhe mode (joke) ----------------------------------------------------
+  // Inserts N extra body segments between the middle and top sections, each
+  // a clone of the middle mesh, each writhing on its own per-frame sinusoid
+  // with a phase offset so the whole stack wriggles like a worm. The face
+  // stays put on top, looking around horrifyingly while the body undulates.
+  // Trigger from the browser console: JIBO_WRITHE(10).
+  const writheTickFns = [];
+  function writhe(n) {
+    const segments = Math.max(0, n | 0);
+    const middleCtl = controls['middleSection_r'];
+    const topCtl = controls['topSection_r'];
+    if (!middleCtl || !topCtl) {
+      console.warn('jibo: writhe — rig not ready yet, try again after the model loads');
+      return;
+    }
+    const middleFrame = middleCtl.frame;
+    const topFrame = topCtl.frame;
+    // The meshes attached to middleSection (excluding any child SKELETON
+    // frames like topSection). Cloned per segment so each writhing chunk
+    // has its own mesh instance.
+    const knownFrames = new Set(Object.values(frameMap));
+    const middleMeshes = middleFrame.children.filter((c) => !knownFrames.has(c));
+
+    // Reparent topSection off the original middle — it'll re-attach at the
+    // end of the chain after the new segments are stacked.
+    middleFrame.remove(topFrame);
+
+    let parent = middleFrame;
+    for (let i = 0; i < segments; i += 1) {
+      const seg = new THREE.Group();
+      seg.name = `writhe_seg_${i}`;
+      // Same vertical offset as the topSection has from the middle, so each
+      // new segment stacks on top of the previous one along the body axis.
+      seg.position.copy(topFrame.position);
+      seg.quaternion.copy(middleCtl.initialRotation);
+      for (const m of middleMeshes) seg.add(m.clone());
+      parent.add(seg);
+      parent = seg;
+
+      // Per-segment writhing oscillation. Phase offset propagates the wave
+      // up the body so the segments don't all swing in unison. Amplitude is
+      // large on purpose — the joke is the horror.
+      const phase = i * 0.65;
+      const freq = 0.45;
+      const amp = 0.32;
+      writheTickFns.push((tSec) => {
+        const angle = Math.sin(tSec * 2 * Math.PI * freq + phase) * amp;
+        const spin = new THREE.Quaternion().setFromAxisAngle(middleCtl.axis, angle);
+        seg.quaternion.multiplyQuaternions(middleCtl.initialRotation, spin);
+      });
+    }
+
+    // Face goes back on at the top of the new stack.
+    parent.add(topFrame);
+    console.log(`[jibo] writhing — added ${segments} extra segment${segments === 1 ? '' : 's'} (reload to undo)`);
+  }
+  function tickWrithe(tSec) {
+    for (const fn of writheTickFns) fn(tSec);
+  }
+
   const ready = (async () => {
     const [skel, kin, meshes] = await Promise.all([
       fetchJSON(SKEL_FILE),
@@ -181,5 +241,7 @@ export function createJiboRig(scene) {
     parts,
     frames: frameMap,
     reset,
+    writhe,
+    tickWrithe,
   };
 }
