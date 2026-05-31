@@ -3,14 +3,14 @@
 // Usage:
 //   import { createRegistry } from './nlu/index.js';
 //   const reg = createRegistry();
-//   await reg.loadSkill('@be/clock', '/path/or/url/to/launch.rule');
-//   await reg.loadSkill('@be/main-menu', ...);
+//   await reg.loadSkill('clock', '/path/or/url/to/launch.rule');
+//   await reg.loadSkill('main-menu', ...);
 //   const result = reg.parse('what time is it');
 //   //  → { asr, nlu:{intent,entities,rules}, match:{skillID, launch, onRobot} }
 //
-// The returned object matches the cloud's IntentRouter shape so
-// GlobalManagerService._onTurnResult can be fed directly. If no rule
-// matches, returns null (caller falls back to local-nlu.js regex matcher).
+// The returned object matches the cloud's intent-router shape so the global
+// manager's turn-result handler can be fed directly. If no rule matches,
+// returns null (caller falls back to local-nlu.js regex matcher).
 
 import { parse as parseRules } from './parser.js';
 import { matchRule, tokenize } from './matcher.js';
@@ -50,8 +50,7 @@ export function createRegistry() {
 
   // Load a factory grammar (yes_no.grm, date.grm, etc.) so `$factory:NAME`
   // refs in skill rules match real content instead of falling back to wildcards.
-  // Factory grammars are the same .rule DSL — they live in jibo-nlu-data/en-us/
-  // factory_rules/ in the source-of-truth tree.
+  // Factory grammars are the same .rule DSL.
   async function loadFactory(name, sourceOrUrl) {
     let source = sourceOrUrl;
     if (/^https?:|^\//.test(sourceOrUrl)) {
@@ -96,17 +95,16 @@ export function createRegistry() {
     if (!winner) return null;
     const ent = winner.m.entities || {};
     const intent = ent.intent || ent.action || '';
-    // NLParse + Input mirror the cloud's jibo-nlu output shape that on-robot
-    // skills read directly off the result object. @be/chitchat InitState
-    // (index.js:909 addEmotionInfo) does `data.asrResult.NLParse.valenceImpact`
-    // — with NLParse undefined the FlowExecutor throws an unhandled rejection
-    // and the bundle hangs in an endless requestAnimationFrame loop. Populate
-    // it from entities + sensible defaults (so jibo.emotion.triggerImpact sees
-    // finite numbers). Tag values like `{valenceImpact='0.5'}` come through
-    // entities as strings; coerce to numbers. `Input` is the raw text the
-    // skill reads for analytics / readback. The cloud puts NLParse alongside
-    // asr/nlu/match (see @be/main-menu/index.js:319+ redirectOptions for the
-    // shape the be skills construct themselves).
+    // NLParse + Input mirror the cloud's NLU output shape that on-robot
+    // skills read directly off the result object. The chitchat init reads
+    // `data.asrResult.NLParse.valenceImpact` during processing — with NLParse
+    // undefined the flow executor throws an unhandled rejection and the bundle
+    // hangs in an endless requestAnimationFrame loop. Populate it from
+    // entities + sensible defaults (so jibo.expression sees finite numbers).
+    // Tag values like `{valenceImpact='0.5'}` come through entities as strings;
+    // coerce to numbers. `Input` is the raw text the skill reads for analytics
+    // / readback. The cloud puts NLParse alongside asr/nlu/match — same shape
+    // the on-robot skills construct themselves when redirecting.
     const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
     const NLParse = Object.assign({}, ent, {
       intent,

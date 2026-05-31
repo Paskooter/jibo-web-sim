@@ -1,12 +1,12 @@
 // Skill iframe bootstrap + in-place loader.
 //
-// Runs an ORIGINAL skill bundle unmodified. Two modes, chosen by what the bundle
+// Runs an original skill bundle unmodified. Two modes, chosen by what the bundle
 // ships:
 //
 //  - SHIM mode (our demo skills, most third-party skills): install our lightweight
 //    `jibo` runtime (window.jibo) so `require('jibo')` resolves to it.
-//  - REAL-RUNTIME mode (bundles that ship their own jibo runtime, e.g. jibo-be):
-//    let `require('jibo')` load the bundle's OWN real runtime (real PixiJS
+//  - REAL-RUNTIME mode (bundles that ship their own jibo runtime):
+//    let `require('jibo')` load the bundle's own real runtime (real PixiJS
 //    FaceRenderer etc.), boot it in UNIT_TESTS run mode so its robot-service
 //    plugins skip cleanly offline, and drive the eye locally (see live-eye.js).
 //
@@ -21,34 +21,42 @@ import { installKbService } from './services/kb-service.js';
 import { localParse, KNOWN_PHRASES } from './local-nlu.js';
 import { createRegistry } from './nlu/index.js';
 
-// Rule-based NLU registry — loads the actual launch.rule files for the
-// on-robot @be/* skills (cloned from the be/ org's gitea repos and shipped
-// under assets/be-rules/). Used as PRIMARY local NLU when no pegasus server
-// is configured; falls back to the regex-based local-nlu.js for any input
-// the rules don't match. The order of loadSkill calls is the priority
-// order for first-match-wins.
+// Rule-based NLU registry. Loaded from whatever rule files the user's skill
+// bundle ships under its own tree:
+//   - <bundle>/node_modules/<scope>/<name>/launch.rule  → registered as <scope>/<name>
+//   - <bundle>/**/*.grm                                  → registered as a factory grammar
+// Nothing is bundled with the simulator — the rules are part of the user's
+// bundle. Used as PRIMARY local NLU when no backend is configured; falls back
+// to the regex-based local-nlu.js for any input the rules don't match.
 const _nluRegistry = createRegistry();
 const _nluReady = (async () => {
-  // Voice-launchable @be/* skills with a launch.rule. The rest (first-contact,
-  // surprises, restore, introductions, tutorial, exercise, hue-control, remote,
-  // word-of-the-day) are either internal-only flows or fully cloud-driven —
-  // they have no on-robot launch.rule to wire up. nimbus has a one-liner
-  // launch rule (`do nimbus`).
-  const skills = ['clock', 'main-menu', 'settings', 'greetings', 'who-am-i',
-                  'friendly-tips', 'gallery', 'create', 'circuit-saver',
-                  'idle', 'ifttt', 'chitchat', 'nimbus'];
-  for (const s of skills) {
-    try { await _nluRegistry.loadSkill('@be/' + s, '/assets/be-rules/' + s + '/launch.rule'); }
-    catch (e) { console.warn('[nlu] skill load failed:', s, e.message); }
+  // Wait briefly for the bundle's file manifest to be available — it's
+  // populated synchronously by cjs-require during bundle boot, but our NLU
+  // setup races with the loader. If the bundle never loads (e.g. host without
+  // a configured skill), this just times out and we serve regex-only NLU.
+  for (let i = 0; i < 50 && !(window.__skillManifest && window.__skillManifest.size); i += 1) {
+    await new Promise((r) => setTimeout(r, 100));
   }
-  // Factory grammars (yes_no, date, time, world_city_country, ...) expand
-  // `$factory:NAME` refs in skill rules to real content instead of the 1-3
-  // word wildcard fallback in matcher.js. Source: jibo-nlu-data/en-us/factory_rules.
-  // yes_no is by far the most important — every MIM yes/no prompt uses it.
-  const factories = ['yes_no'];
-  for (const f of factories) {
-    try { await _nluRegistry.loadFactory(f, '/assets/be-rules/factory/' + f + '.grm'); }
-    catch (e) { console.warn('[nlu] factory load failed:', f, e.message); }
+  const m = window.__skillManifest;
+  if (!m || !m.size) { console.log('[nlu] no skill manifest; rule-based NLU disabled'); return; }
+  const root = window.__SKILL_DIR__ || '';
+  const launchRe = new RegExp('^' + root.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&') + '/node_modules/(@[^/]+/[^/]+|[^/]+)/launch\\.rule$');
+  const grmRe = /\/([^/]+)\.grm$/;
+  const launches = [];
+  const grammars = [];
+  for (const url of m.keys()) {
+    const lm = launchRe.exec(url);
+    if (lm) { launches.push({ pkg: lm[1], url }); continue; }
+    const gm = grmRe.exec(url);
+    if (gm) grammars.push({ name: gm[1], url });
+  }
+  for (const { pkg, url } of launches) {
+    try { await _nluRegistry.loadSkill(pkg, url); }
+    catch (e) { console.warn('[nlu] skill load failed:', pkg, e.message); }
+  }
+  for (const { name, url } of grammars) {
+    try { await _nluRegistry.loadFactory(name, url); }
+    catch (e) { console.warn('[nlu] factory load failed:', name, e.message); }
   }
   console.log('[nlu] registry loaded', _nluRegistry._skills.length, 'skill rule(s),',
               Object.keys(_nluRegistry._factories).length, 'factory grammar(s)');
@@ -57,8 +65,8 @@ const _nluReady = (async () => {
 const params = new URLSearchParams(location.search);
 const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
 const entry = params.get('entry') || 'index.html';
-// Optional backend server (e.g. a Pegasus cloud at `pegasus.jibo`), set in the
-// host UI. Exposed for the runtime/services to route cloud requests at.
+// Optional cloud backend, set in the host UI. Exposed for the runtime/services
+// to route cloud requests at.
 const server = (params.get('server') || '').trim();
 if (server) window.__JIBO_SERVER__ = server;
 
@@ -131,10 +139,10 @@ async function bootReal() {
     set(v) {
       _jibo = v;
       if (v) {
-        // Connect jibo-be's service clients to the in-memory service bus (the
-        // in-browser stand-in for the original sim's localhost services).
+        // Connect the bundle's service clients to the in-memory service bus
+        // (the in-browser stand-in for localhost services).
         try { if (!window.__serviceBus) window.__serviceBus = installServiceBus(req); } catch (e) { console.warn('[boot] service bus:', e.message); }
-        // service-records plugin is skipped under UNIT_TESTS, so jibo.records is empty
+        // The service-records plugin is skipped under UNIT_TESTS, so jibo.records is empty
         // and clients have no host:port. Populate it from the bus so they connect to us.
         try { if (window.__serviceBus) v.records = window.__serviceBus.records(); } catch (e) { console.warn('[boot] records:', e.message); }
         try { installKbService(req); } catch (e) { console.warn('[boot] kb service:', e.message); }
@@ -145,9 +153,9 @@ async function bootReal() {
     },
   });
 
-  // The Be framework sets `global.be = this` at the top of its constructor (by which
-  // point @be/be-framework is fully loaded) and only calls BeSkill.init later in
-  // be.init(). Intercept that assignment to patch BeSkill.init in between.
+  // The skill framework sets `global.be = this` at the top of its constructor
+  // (by which point the framework is fully loaded) and only calls BeSkill.init
+  // later in be.init(). Intercept that assignment to patch BeSkill.init in between.
   let _be;
   Object.defineProperty(window, 'be', {
     configurable: true,
@@ -174,26 +182,28 @@ async function bootReal() {
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     if (!m || m.__jibo !== true) return;
-    // Typed chat input from the host. Two paths, mirroring the original sim:
-    //  - In-MIM: MimManager.handleSpeech.emit(...) (same hook ActionData.UTTERANCE
-    //    uses). Only the active MIM listens; outside any MIM it's a no-op.
-    //  - Out-of-MIM / global: jetstream.startLocalTurn({clientNLU:{...}}) — what
-    //    jibo.js does itself when a spoofed utterance arrives mid-speak. This
-    //    requires the cloud (Pegasus); HTTP goes via BusXHR's native pass-through.
+    // Typed chat input from the host. Two paths:
+    //  - In-MIM: MimManager.handleSpeech.emit(...) — the same hook the
+    //    UTTERANCE action uses. Only the active MIM listens; outside any MIM
+    //    it's a no-op.
+    //  - Out-of-MIM / global: jetstream.startLocalTurn({clientNLU:{...}}) —
+    //    what the runtime does itself when a spoofed utterance arrives
+    //    mid-speak. This requires the cloud; HTTP goes via BusXHR's native
+    //    pass-through.
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
       const text = m.text.trim();
       // Stop in-flight Web Speech immediately so the MIM can transition past speak.
-      // Without this the bundle's MimSkill.onSpeechEvent (jibo.js:1593) sees
-      // current=speak and takes the spoofed CLIENT_NLU path, leaving the MIM
-      // stuck on raw intent and ignoring the cloud's parsed NLU.
+      // Without this the bundle's MimSkill.onSpeechEvent sees current=speak and
+      // takes the spoofed CLIENT_NLU path, leaving the MIM stuck on raw intent
+      // and ignoring the cloud's parsed NLU.
       try { window.parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* */ }
 
       // Path A — active MIM Listen open: inject CLIENT_ASR into THAT turn via
-      // LocalTurnRequest.update(string) (jetstream-client.js:946-963). The hub
-      // parses against the listen's rules and returns the TURN_RESULT on the
-      // same WS the MIM is waiting on; the MIM advances. (live-eye.connectCloud
-      // monkey-patches jetstream.startLocalTurn to stash the active non-launch
-      // request at window.__activeListen.)
+      // LocalTurnRequest.update(string). The hub parses against the listen's
+      // rules and returns the TURN_RESULT on the same WS the MIM is waiting on;
+      // the MIM advances. (live-eye.connectCloud monkey-patches
+      // jetstream.startLocalTurn to stash the active non-launch request at
+      // window.__activeListen.)
       const active = (typeof window !== 'undefined' && window.__activeListen) || null;
       const activeUsable = active && typeof active.update === 'function' && active.status !== 'CANCELED' && active.status !== 'COMPLETED';
       if (activeUsable) {
@@ -205,33 +215,32 @@ async function bootReal() {
       }
 
       // Path B — no active Listen (MIM still in speak, or idle): pre-parse the
-      // text via a fresh launch-rule turn (CLIENT_ASR so the hub PARSES it),
+      // text via a fresh launch-rule turn (CLIENT_ASR so the hub parses it),
       // then route the parsed NLU two ways:
       //   1. global-manager's turnResult listener already handles skill-launch
       //      matches (via jetstream events).
       //   2. If no skill match, forward the parsed NLU to mim.handleSpeech.emit
-      //      so the active MIM's onSpeechEvent (jibo.js:1581) sees a canonical
-      //      intent (e.g. "yes" for typed "sure") instead of the raw text the
-      //      MIM would otherwise reject in parseSpoofedUtterance (jibo.js:2157).
+      //      so the active MIM's onSpeechEvent sees a canonical intent
+      //      (e.g. "yes" for typed "sure") instead of the raw text the MIM
+      //      would otherwise reject when parsing a spoofed utterance.
       // Why NOT call handleSpeech.emit synchronously with raw text: the bundle
       // wraps the raw string as {intent: <raw>}, sends CLIENT_NLU with that
       // utterance, then locally constructs asrResults from the raw utterance
-      // (NOT the cloud response) at jibo.js:2164. The MIM's rule then sees
-      // intent="sure" instead of the canonical "yes" and rejects.
+      // (not the cloud response). The MIM's rule then sees intent="sure"
+      // instead of the canonical "yes" and rejects.
       const js = window.jibo && window.jibo.jetstream;
       if (!js || typeof js.startLocalTurn !== 'function') return;
 
-      // No-pegasus fallback: when the host has no backend server configured,
-      // the cloud path can't reach an IntentRouter. Run NLU locally.
-      // PRIMARY path: the rule-based registry (src/skill-runtime/nlu/) which
-      // matches against the actual jibo-nlu .rule files we ship under
-      // assets/be-rules/ — same DSL the cloud's IntentRouter compiles, just
-      // walked by a JS interpreter.
-      // FALLBACK path: the regex matcher (local-nlu.js) for cases the rules
+      // Offline fallback: when the host has no backend server configured,
+      // the cloud path can't reach an intent router. Run NLU locally.
+      // Primary path: the rule-based registry (src/skill-runtime/nlu/) which
+      // matches against the .rule files the bundle ships — same DSL the cloud
+      // compiles, just walked by a JS interpreter.
+      // Fallback path: the regex matcher (local-nlu.js) for cases the rules
       // don't cover.
-      // Only ON-ROBOT @be/* skills work this way — cloud-skill intents
-      // (chitchat dances, news) need the cloud's SKILL_ACTION mim graph
-      // and are silently dropped (with a log hint).
+      // Only on-robot skills work this way — cloud-skill intents (chitchat
+      // dances, news) need the cloud's SKILL_ACTION mim graph and are silently
+      // dropped (with a log hint).
       if (!window.__JIBO_SERVER__) {
         (async () => {
           await _nluReady;
@@ -315,7 +324,7 @@ function bootShim() {
   runBundle();
 }
 
-// Use the real runtime when the bundle ships one (e.g. jibo-be); otherwise the shim.
+// Use the real runtime when the bundle ships one; otherwise the shim.
 fetch(`${dir}/node_modules/jibo/lib/jibo.js`, { method: 'HEAD' })
   .then((r) => (r.ok ? bootReal() : bootShim()))
   .catch(() => bootShim());

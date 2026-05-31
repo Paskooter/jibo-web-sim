@@ -1,10 +1,9 @@
 // notifications service — banner notifications ({ type, title, description }).
 //
-// Matches the original simulator's NotificationsService surface: a
-// 'notification-created' event and the type set the notifications-view styled
-// (message / battery / alarm / twitter; jibo-cli notifications-view.tsx). The
-// skill creates one via jibo.notifications.create; the host shows the banner
-// and echoes a 'created' event back to the skill.
+// Emits a 'notification-created' event; the type set used by the panel is
+// message / battery / alarm / twitter. The skill creates one via
+// jibo.notifications.create; the host shows the banner and echoes a
+// 'created' event back to the skill.
 //
 // Returns { service, push }:
 //   service — skill-callable (create) registered on the bridge.

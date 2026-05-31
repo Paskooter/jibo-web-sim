@@ -6,8 +6,8 @@
 // (so the queue waits for the real end of speech), and by a timing estimate
 // when there's no audio (e.g. SpeechSynthesis unavailable). A subtitle bar
 // shows the current text, per-word 'word' events fire, and 'start'/'stop'
-// events drive the talking eye. Mirrors the public TTSService shape
-// (speak/stop, 'word'/'stop' events) from sdk-archive/jibo.
+// events drive the talking eye. Implements the public TTSService shape
+// (speak/stop, 'word'/'stop' events).
 //
 // Note on audio: browsers block audio until the user interacts with the page;
 // the host gates skill start behind a click so the greeting is audible.

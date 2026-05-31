@@ -1,8 +1,7 @@
 // Transient audio-event visualization — a sound "ping" at a world position.
 //
-// The original drew a sphere that scaled down and removed itself
-// (jibo-cli audio-event.ts). Here it's an expanding, fading sphere driven by
-// the render loop. update(now) returns false once finished.
+// An expanding, fading sphere driven by the render loop. update(now) returns
+// false once the animation has finished.
 
 import * as THREE from 'three';
 

@@ -6,8 +6,7 @@
 // onto those 4 projected points and apply it as a CSS `matrix3d` transform.
 // Recomputed every frame so the face tracks the body as it articulates/orbits.
 //
-// This is the technique from the original simulator's face-on-body.tsx, which
-// credits http://math.stackexchange.com/questions/296794 (and jsfiddle dFrHS).
+// 2D homography reference: http://math.stackexchange.com/questions/296794
 
 import * as THREE from 'three';
 
@@ -16,7 +15,7 @@ import * as THREE from 'three';
 export const FACE_WIDTH = 1280;
 export const FACE_HEIGHT = 720;
 
-// --- 3x3 projective matrix helpers (verbatim approach from the reference) ---
+// --- 3x3 projective matrix helpers ---
 
 function adj(m) {
   return [

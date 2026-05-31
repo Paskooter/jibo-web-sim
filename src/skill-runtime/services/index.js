@@ -1,10 +1,11 @@
 // Registry of local service implementations for the in-memory bus.
 //
-// Faithful in-browser stand-ins for the original simulator's service processes
-// (skills-service-manager). Each service is registered by the same name jibo-be's
-// RegistryClient looks it up by. Implementations are ported incrementally; until a
-// real impl lands, a stub provides records + no-op RPCs so discovery + connection
-// work (jibo-be connects, calls resolve) without the per-crash hacks.
+// Faithful in-browser stand-ins for the on-device service processes
+// the runtime would otherwise talk to. Each service is registered by
+// the same name the runtime's RegistryClient looks it up by.
+// Implementations are ported incrementally; until a real impl lands,
+// a stub provides records + no-op RPCs so discovery + connection
+// work without the per-crash hacks.
 
 import { ServiceBus } from './service-bus.js';
 import { GlobalManagerService } from './global-manager.js';
@@ -30,7 +31,7 @@ function httpService(name, routes) {
     },
   };
 }
-// Response shapes match what each client validates (jibo-service-clients). Robot is
+// Response shapes match what each service client validates. Robot is
 // in a normal interactive mode, on wifi, with no pending errors/backups. Specific
 // routes are matched before the '' catch-all (insertion order).
 const REAL_HTTP = {
@@ -54,26 +55,25 @@ const REAL_HTTP = {
     '/hasBackupData': { isReady: false },
     '': {},
   }),
-  // MediaManagerService — real SSM registers both 'media-manager' AND alias
-  // 'media-proxy' (MediaManagerService.ts:72,:817-846). Source HTTP routes are
-  // /media-manager/{adopt,upload,download,delete,audiostreamstart,
-  // audiostreamstop,speakerlevel} and /proxy/media/photo/get?id=<id>. Each
-  // returns 204 (mutations) or a JPEG (photo proxy) — we 200/no-op them since
-  // skills don't crash on the response shape, only on the lack of a record.
-  // The same impl is registered under both names so jibo.Media's record
-  // lookup ('media-proxy' at jibo.js:19792) and the service-clients
+  // MediaManagerService — on-device the service registers both
+  // 'media-manager' AND alias 'media-proxy', with HTTP routes for
+  // adopt/upload/download/delete/audiostreamstart/audiostreamstop/
+  // speakerlevel and a /proxy/media/photo/get?id=<id> photo proxy.
+  // We 200/no-op them since skills don't crash on the response shape,
+  // only on the lack of a record. The same impl is registered under
+  // both names so jibo.media's record lookup AND the service-client
   // mediaManager.init (which keys on 'media-manager') both succeed.
   'media-manager': httpService('media-manager', { '': '' }),
   'media-proxy': httpService('media-proxy', { '': '' }),
-  // RemoteService — real SSM hosts /remote WS for Loop iOS/Android pairing
-  // (RemoteService.ts:33). The @be/remote skill connects + waits; no client
+  // RemoteService — on-device this hosts a /remote WS for Loop
+  // iOS/Android pairing. The remote skill connects + waits; no client
   // ever pairs in the sim, so we 200 the HTTP surface and return empty
   // success to keep the skill's init from throwing.
   remote: httpService('remote', { '': { status: 'OK' } }),
-  // SchedulerService — real SSM exposes /add /remove /list /has-job for cron
-  // (@be/surprises-ota schedules its OTA update check via this).
-  // SchedulerService.ts:67-156. Return empty-list canned-OK so 'list' calls
-  // resolve and 'has-job' reports false without crashing.
+  // SchedulerService — exposes /add /remove /list /has-job for cron
+  // (the OTA update check is scheduled via this). Return empty-list
+  // canned-OK so 'list' calls resolve and 'has-job' reports false
+  // without crashing.
   scheduler: httpService('scheduler', {
     '/list': { jobs: [] },
     '/has-job': { hasJob: false },
@@ -99,15 +99,15 @@ const REAL_HTTP = {
   },
 };
 
-// Service names jibo-be discovers/connects to. Source: skills-service-manager
-// registers each under exactly these names (services/<X>/<X>Service.ts:NN).
-// 'media-proxy' is an alias the real MediaManagerService also registers itself
-// under. 'expression' is the eye/animation engine we build on animation-utilities;
-// 'server' is the notifications endpoint; 'global-manager' is the cloud-event-
-// to-skill-relaunch bridge that drives Be.redirect. Sim-only auxiliary services
-// (jetstream, asr, listen, nlu, media, gl, im, emotion, embodied, context,
-// autobot, action, volume, location) are stubbed for jibo-be's service-discovery
-// iteration to succeed without a record-miss.
+// Service names the runtime discovers/connects to. 'media-proxy' is an
+// alias the real MediaManagerService also registers itself under.
+// 'expression' is the eye/animation engine we build on animation-utilities;
+// 'server' is the notifications endpoint; 'global-manager' is the
+// cloud-event-to-skill-relaunch bridge that drives skill redirects.
+// Sim-only auxiliary services (jetstream, asr, listen, nlu, media, gl,
+// im, emotion, embodied, context, autobot, action, volume, location)
+// are stubbed for the runtime's service-discovery iteration to succeed
+// without a record-miss.
 const SERVICE_NAMES = [
   'registry', 'system-manager', 'kb', 'body', 'expression',
   'tts', 'asr', 'listen', 'nlu', 'lps', 'media', 'notifications',

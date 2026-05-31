@@ -2,10 +2,9 @@
 //
 // The skill runs in a sandboxed <iframe>. Inside it, the `jibo` shim
 // (src/skill-runtime/jibo-shim.js) proxies the public `jibo.*` API over
-// postMessage to host-side services registered here. This mirrors the role
-// the original Electron simulator gave its skills-service-manager Factory +
-// RegistryClient (see sdk-archive/jibo-cli/src/simulator/client/index.tsx),
-// but using postMessage as the transport instead of WebSocket/HTTP.
+// postMessage to host-side services registered here. This plays the same role
+// a desktop simulator's service bus would, but using postMessage as the
+// transport instead of WebSocket/HTTP.
 //
 // Wire protocol (all messages carry `__jibo: true`):
 //   skill → host   { kind: 'hello' }                                  handshake

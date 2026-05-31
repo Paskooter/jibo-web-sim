@@ -1,9 +1,10 @@
 // In-browser TTSService.
 //
-// Replaces the original C++ TTS engine (~680MB voice model — not browser
-// runnable) with a Web Speech API bridge to the host window. Faithful to the
-// HTTP/WS contract jibo-service-clients/lib TTSService expects, so the entire
-// embodied-dialog speak pipeline runs through to completion:
+// Replaces the on-device C++ TTS engine (~680MB voice model — not
+// browser runnable) with a Web Speech API bridge to the host window.
+// Faithful to the HTTP/WS contract the runtime's TTS service client
+// expects, so the entire embodied-dialog speak pipeline runs through
+// to completion:
 //
 //   1. Skill calls jibo.embodied.speech.speak(text).
 //   2. The pipeline POSTs /tts_lex (lex tokens), /tts_pos_tagging (POS tags),
@@ -59,9 +60,10 @@ function _estimateMs(plain) {
   return Math.min(30000, Math.max(900, plain.length * 75 + 700));
 }
 
-// Talk the prompt via the host window. Resolves when speech finishes (or the
-// fallback timer fires). Mirrors the inner contract of jibo-embodied-dialog's
-// speak: it's a Promise<void> that paces the surrounding timeline.
+// Talk the prompt via the host window. Resolves when speech finishes
+// (or the fallback timer fires). Mirrors the inner contract of the
+// embodied-dialog speak: a Promise<void> that paces the surrounding
+// timeline.
 function _speakViaHost(prompt) {
   _ensureBridge();
   const plain = _toPlain(prompt);
@@ -77,20 +79,19 @@ function _speakViaHost(prompt) {
   });
 }
 
-// Synthesize a token-timings response from the prompt. embodied-dialog's
-// _generateWordSchedule (jibo-embodied-dialog.js:5454) walks our tokens and
-// pairs each one with a wordNode (word / break / audio / say-as) by name
-// match. CRITICAL: <break/>, <audio/>, <say-as>...</say-as> have to come
+// Synthesize a token-timings response from the prompt. The embodied
+// dialog's word-schedule generator walks our tokens and pairs each one
+// with a wordNode (word / break / audio / say-as) by name match.
+// CRITICAL: <break/>, <audio/>, <say-as>...</say-as> have to come
 // through as special MARKER tokens — names `<break>`, `<audioBreak>`,
-// `<say-as>` (TTS_BREAK / TTS_AUDIO_BREAK / TTS_SAY_AS at
-// jibo-embodied-dialog.js:4976-4978) — or the resulting wordSchedule is
+// `<say-as>` (matching the TTS_BREAK / TTS_AUDIO_BREAK / TTS_SAY_AS
+// markers the runtime checks for) — or the resulting wordSchedule is
 // missing entries for those nodes. Any BLOCKING <anim> tag (e.g. the
-// chitchat dance) anchors its timeSyncNode to a break/word node; when that
-// node has no schedule entry, the bundle silently drops the anim at
-// line 5523 ("Could not resolve time-sync information for blocking asset
-// request"). That's why the entire chitchat-dance SLIM produced only the
-// surrounding auto-tagger poses — the dance node never made it to the
-// timeline.
+// chitchat dance) anchors its timeSyncNode to a break/word node; when
+// that node has no schedule entry, the bundle silently drops the anim
+// ("Could not resolve time-sync information for blocking asset
+// request"). Without the markers, dance/anim nodes never made it to
+// the timeline.
 //
 // We preserve the markers by replacing the relevant tags with sentinel
 // strings BEFORE the tag-stripping pass, then re-expanding them into named

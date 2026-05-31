@@ -1,12 +1,12 @@
 // In-memory KnowledgeBase service.
 //
-// The original sim ran KBService (skills-service-manager) — a thin HTTP wrapper
-// over jibo.kb.KnowledgeDatabase (an nedb/disk store). jibo-be's KB client
-// (jibo-kb WebClient) talks to it over axios HTTP. In-browser there's no server
-// (and no disk), so we back the WebClient directly with an in-memory node store
-// per kb slice, faithful to the node wire-format (_id/data/type/created/updated/
-// edges round-tripped via createNodeFromObject). Reads/writes persist for the
-// session, so subskills that store + reload KB state work.
+// On-device the KB service is a thin HTTP wrapper over a disk-backed
+// node store, and the runtime's KB client talks to it over axios HTTP.
+// In-browser there's no server (and no disk), so we back the WebClient
+// directly with an in-memory node store per kb slice, faithful to the
+// node wire-format (_id/data/type/created/updated/edges round-tripped
+// via createNodeFromObject). Reads/writes persist for the session, so
+// subskills that store + reload KB state work.
 
 const stores = new Map(); // kbName -> { rootId, nodes: Map<id, obj> }
 
@@ -46,12 +46,11 @@ function seedChildren(kbName, root) {
     if (root.edges[layer].indexOf(child._id) < 0) root.edges[layer].push(child._id);
   };
   if (kbName === '/jibo/holidays' || kbName === 'jibo/holidays') {
-    // @be/be-framework's HolidayBeSkillPlugin (Holiday.fetchHolidayList) warns
-    // "KB returned no holiday list" if root.edges.holiday is empty, then
-    // "No active holiday data" downstream. Seed one disabled holiday so
-    // the list is non-empty; filterEnabledHolidayNames drops it (isEnabled
-    // false) and getActiveHolidaySet() returns an empty Set — same end
-    // state, no warning.
+    // The framework's holiday plugin warns "KB returned no holiday list"
+    // if root.edges.holiday is empty, then "No active holiday data"
+    // downstream. Seed one disabled holiday so the list is non-empty;
+    // the filter drops it (isEnabled false) and getActiveHolidaySet()
+    // returns an empty Set — same end state, no warning.
     addChild('holiday', {
       _id: '_placeholder_holiday',
       type: 'holiday',

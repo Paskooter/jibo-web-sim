@@ -10,11 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
-// Pegasus hub auth: it accepts a Bearer JWT signed with HS256 using
-// process.env.ETCO_server_webTokenSecret. The default dev/local secret +
-// credentials are public defaults baked into hub-client-cli
-// (packages/hub-client-cli/utils/authentication.ts + resources/credentials.json).
-// Override via env if the user's deployment changes them.
+// Cloud hub auth: the hub accepts a Bearer JWT signed with HS256. The secret
+// and credential identifiers are fully configurable via env vars — any
+// non-default deployment can override them without touching this file.
 const HUB_SECRET = process.env.HUB_AUTH_SECRET || 'uHGhXhdXzBybGX7YHuEwAFZC';
 const HUB_CREDENTIALS = {
   id: process.env.HUB_AUTH_ID || 'hub-client-account-id',
@@ -45,19 +43,19 @@ app.use((req, res, next) => {
   next();
 });
 
-// Dev-only: serve external skill bundles for in-place compatibility testing
-// (e.g. the original jibo-be), kept OUT of the repo. Point EXTERNAL_SKILLS at a
-// directory of unpacked bundles; defaults to /tmp.
+// Dev-only: serve external skill bundles for in-place compatibility testing,
+// kept OUT of the repo. Point EXTERNAL_SKILLS at a directory of unpacked
+// bundles; defaults to /tmp.
 const EXTERNAL_SKILLS = process.env.EXTERNAL_SKILLS || '/tmp';
 // The CommonJS require shim probes extensionless paths (`index`) and bare
-// directories (`node_modules/@be/clock`). Disable the `extensions`/`index`/
-// `redirect` fallbacks so those 404 instead of returning a directory's
-// index.html — letting the shim fall through to `.js` / package.json `main`.
-// Compat patch (must precede the static handler): jibo's CRN texture-decode
+// directories. Disable the `extensions`/`index`/`redirect` fallbacks so those
+// 404 instead of returning a directory's index.html — letting the shim fall
+// through to `.js` / package.json `main`.
+// Compat patch (must precede the static handler): the CRN texture-decode
 // worker posts its decoded texture back to the main thread as a TRANSFERABLE
 // (`postMessage({...}, [dxtData.buffer])`), but that buffer is a view into the
 // emscripten heap and isn't detachable in our Chrome — the worker's postMessage
-// throws and ANY .crn asset load (e.g. the MainMenu button atlas) hangs forever.
+// throws and ANY .crn asset load hangs forever.
 // Serve the worker with the transfer list dropped so the buffer is
 // structured-cloned (copied) instead — identical result, just not zero-copy.
 // Served at its real URL (not a blob) so the worker's relative .crn XHR still
@@ -72,20 +70,17 @@ app.get(/webgl-texture-util\.js$/, (req, res, next) => {
   res.type('application/javascript').send(src.replace(/,\s*\[\s*dxtData\.buffer\s*\|\|\s*dxtData\s*\]\s*\)/g, ')'));
 });
 
-// @be/* skills reference animation textures (White_Eye.png etc.) under their
-// own animations/textures/ folder but the directory doesn't exist in their
-// bundle — the textures live in jibo-anim-db-animations/animations/textures/.
-// Animations themselves come from the shared anim-db (KeysAnimation loads
-// them by name from the global manifest), and their texture refs are
+// Some skills reference animation textures (White_Eye.png etc.) under their
+// own animations/textures/ folder, but the directory doesn't exist in their
+// bundle — the textures live in the shared animation database's
+// animations/textures/. Animations themselves come from that shared database
+// (loaded by name from the global manifest), and their texture refs are
 // resolved relative to the *playing skill's* assetPack root, so each
-// consuming skill needs the same redirect. Nimbus hit this first (M57);
-// @be/idle, @be/clock, @be/main-menu, @be/first-contact etc. all use the
-// same anim-db named animations and reproduce the same ENOENT.
+// consuming skill needs the same redirect.
 //
-// Match any @be/<skill>/animations/textures/<subpath> and probe the
-// anim-db copy. The capture is greedy on the subpath because anim-db
-// textures are organized in subdirectories (e.g. jibojis/coin-flip/
-// coin-tails.png) — not just leaf filenames.
+// Match any of the affected skill paths and probe the shared database copy.
+// The capture is greedy on the subpath because the textures are organized
+// in subdirectories — not just leaf filenames.
 app.get(/\/@be\/[^/]+\/animations\/textures\/(.+)$/, (req, res, next) => {
   const m = /\/@be\/[^/]+\/animations\/textures\/(.+)$/.exec(req.path);
   if (!m) { next(); return; }
@@ -107,7 +102,7 @@ app.use('/external-skills', express.static(EXTERNAL_SKILLS, { index: false, redi
 // Supports both external bundles (/external-skills/...) and in-repo demo skills
 // (/skills/...). With a manifest in hand the shim treats every path outside the
 // skill root as known-missing, eliminating the require()-walk's higher-up
-// node_modules/ probes (e.g. /node_modules/pixi.js → 404 cascade in SHIM mode).
+// node_modules/ probes (e.g. /node_modules/pixi.js → 404 cascade in shim mode).
 app.get('/__list', (req, res) => {
   const root = String(req.query.root || '');
   let baseAbs = null;
@@ -121,10 +116,9 @@ app.get('/__list', (req, res) => {
     res.json({ files: [] }); return;
   }
   // Files are { url, size } so the browser shim can satisfy fstat() WITHOUT
-  // pre-fetching every file body. chitchat's postInit walks ~3900 mim files
-  // via FileUtils.findAllFilesWithExt and only checks isFile/isDirectory —
-  // sending sizes here lets open() return a lazy fd whose body is fetched
-  // only on first read.
+  // pre-fetching every file body. Chitchat's postInit walks thousands of MIM
+  // files and only checks isFile/isDirectory — sending sizes here lets open()
+  // return a lazy fd whose body is fetched only on first read.
   const files = [];
   const walk = (absDir, urlDir) => {
     let entries;
@@ -143,8 +137,8 @@ app.get('/__list', (req, res) => {
   res.json({ files });
 });
 
-// Cross-origin image proxy. Skill SKILL_ACTIONs (notably news from
-// report-skill) reference remote thumbnail/article images by absolute URL.
+// Cross-origin image proxy. Skill SKILL_ACTIONs (notably news reporting)
+// reference remote thumbnail/article images by absolute URL.
 // PIXI loads them through HTMLImageElement with crossOrigin='anonymous', but
 // most public image servers don't return Access-Control-Allow-Origin — the
 // image displays in <img> tags but texImage2D refuses to upload it as a
@@ -179,11 +173,11 @@ app.get('/__img', (req, res) => {
   proxyOne(target, true);
 });
 
-// Same-origin proxy to a Pegasus cloud backend, to dodge CORS. The iframe sends
+// Same-origin proxy to a cloud backend, to dodge CORS. The iframe sends
 // `/__cloud<path>` with `X-Cloud-Upstream: <host>:<port>` (or `?upstream=`); we
 // forward the request to that upstream and stream the response back. Browsers
-// don't enforce CORS on the server-to-server hop, so the original jibo cloud
-// (designed for Electron, no CORS) works unmodified through the proxy.
+// don't enforce CORS on the server-to-server hop, so the cloud backend
+// (designed for desktop runtimes, no CORS) works unmodified through the proxy.
 app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
   const upstream = String(req.headers['x-cloud-upstream'] || req.query.upstream || '').trim();
   if (!upstream || !/^[\w.-]+(:\d+)?$/.test(upstream)) {
@@ -225,7 +219,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`jibo-web-sim dev server listening on http://${HOST}:${PORT}/`);
 });
 
-// WebSocket proxy to a Pegasus hub. Browsers can't set custom WS-upgrade headers
+// WebSocket proxy to the cloud hub. Browsers can't set custom WS-upgrade headers
 // (the hub requires X-JIBO-transID per connection and uses a new socket per
 // turn), so the browser opens
 //   ws://<sim>/__cloud-ws?upstream=<host>:<port>&path=<p>&transID=<id>[&robotID=<r>]
@@ -251,11 +245,11 @@ server.on('upgrade', (req, sock, head) => {
     let opened = false;
     const cleanup = () => { try { clientWS.close(); } catch (_) {} try { upstreamWS.close(); } catch (_) {} };
     upstreamWS.on('open', () => { opened = true; });
-    // The hub sends FRAME_TEXT (ClientCloudConnection.cpp:242). The `ws` library
-    // delivers all frames as Buffer by default, and forwarding a Buffer via
-    // clientWS.send(buf) emits a BINARY frame -- browsers then expose ev.data as
-    // a Blob and jetstream-client's JSON.parse fails. Honor isBinary in both
-    // directions: relay text as string, binary as Buffer.
+    // The hub sends text frames. The `ws` library delivers all frames as Buffer
+    // by default, and forwarding a Buffer via clientWS.send(buf) emits a BINARY
+    // frame -- browsers then expose ev.data as a Blob and the client's
+    // JSON.parse fails. Honor isBinary in both directions: relay text as
+    // string, binary as Buffer.
     const relay = (sink, data, isBinary) => { try { sink.send(isBinary ? data : data.toString('utf8'), { binary: !!isBinary }); } catch (_) { /* sink closed */ } };
     const pending = [];
     clientWS.on('message', (data, isBinary) => { if (opened) relay(upstreamWS, data, isBinary); else pending.push([data, isBinary]); });

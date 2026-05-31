@@ -1,13 +1,15 @@
 // Local eye/DOF support for the real jibo runtime.
 //
-// On a real Jibo the eye's DOF stream + DOF metadata come from the robot's
-// expression service. That service is unavailable offline, so we reproduce the
-// parts the runtime/skills need, using animation-utilities (the same library the
-// service is built on, bundled with the skill):
-//   - populateExpressionDofs(): the DOFSet groups jibo.expression.dofs.* that the
-//     embodied-dialog layer reads at init (otherwise it throws on `.ALL`).
-//   - driveEye(): stream a sampled idle pose into the real PixiJS eye so it
-//     renders instead of staying blank.
+// On a real Jibo the eye's DOF stream + DOF metadata come from the
+// robot's expression service. That service is unavailable offline, so
+// we reproduce the parts the runtime/skills need, using animation-
+// utilities (the same library the service is built on, bundled with
+// the skill):
+//   - populateExpressionDofs(): the DOFSet groups jibo.expression.dofs.*
+//     that the embodied-dialog layer reads at init (otherwise it throws
+//     on `.ALL`).
+//   - driveEye(): stream a sampled idle pose into the real PixiJS eye
+//     so it renders instead of staying blank.
 
 import { DOFArbiter } from './dof-arbiter.js';
 
@@ -18,7 +20,7 @@ import { DOFArbiter } from './dof-arbiter.js';
 // actually preempts active animations instead of stacking them.
 export const dofArbiter = new DOFArbiter();
 
-// The DOFSet group names the expression client builds (jibo-expression-client DOFs.js).
+// The DOFSet group names the expression client builds.
 const DOF_SET_NAMES = [
   'ALL', 'BASE', 'BODY', 'EYE', 'LED', 'OVERLAY', 'SCREEN',
   'EYE_ROOT', 'EYE_DEFORM', 'EYE_RENDER', 'EYE_TRANSLATE', 'EYE_ROTATE', 'EYE_COLOR', 'EYE_TEXTURE', 'EYE_VISIBILITY',
@@ -54,12 +56,13 @@ export async function prepareLiveEye(requireFn, skillDir) {
   const base = `${location.origin}${skillDir}/node_modules/animation-utilities/res/geometry-config/`;
   const tdir = `${base}P1.0/textures/`;
 
-  // Patch JiboConfig so callers that construct it with no args (notably
-  // jibo-expression-client/createDOFs) get a usable HTTP base URL instead of
-  // falling back to find-root(__dirname) — which in the browser bundle resolves
-  // to the page origin without a protocol, and FileTools.loadText then forces
-  // `file:` and gets browser-blocked ("Not allowed to load local resource").
-  // Wrap the constructor so callers that DO pass a base keep their behavior.
+  // Patch JiboConfig so callers that construct it with no args
+  // (notably the expression client's createDOFs) get a usable HTTP
+  // base URL instead of falling back to find-root(__dirname) — which
+  // in the browser bundle resolves to the page origin without a
+  // protocol, and FileTools.loadText then forces `file:` and gets
+  // browser-blocked ("Not allowed to load local resource"). Wrap the
+  // constructor so callers that DO pass a base keep their behavior.
   if (!anim.JiboConfig.__webPatched) {
     const Real = anim.JiboConfig;
     const Patched = function JiboConfig(baseGeometryURL, robotVersion) {
@@ -101,20 +104,21 @@ export function populateExpressionDofs(jibo, robotInfo) {
   } catch (e) { console.warn('[live-eye] populateExpressionDofs failed:', e.message); }
 }
 
-// Method names on expression-service handles (AttentionHandle / AcquireHandle /
-// AwaitFaceHandle / ReleaseHandle) that the embodied-dialog code awaits via
-// `Utils.timeout(handle.release(), TIMEOUT)`. Each must RETURN A PROMISE so
-// timeout()'s `pr.then(...)` doesn't blow up with "pr.then is not a function".
-// See jibo-expression-client ReleaseHandle.release / AnimationInstance.stop —
-// all return Promises from sendMessage().
+// Method names on expression-service handles (AttentionHandle /
+// AcquireHandle / AwaitFaceHandle / ReleaseHandle) that the
+// embodied-dialog code awaits via `Utils.timeout(handle.release(),
+// TIMEOUT)`. Each must RETURN A PROMISE so timeout()'s `pr.then(...)`
+// doesn't blow up with "pr.then is not a function" — the real
+// handles return Promises from sendMessage().
 const PROMISE_RETURNING_METHODS = new Set([
   'release', 'cancel', 'stop', 'destroy', 'fastForward', 'play', 'pause',
   'reset', 'finish', 'init', 'open', 'close',
 ]);
 
-// A value that is await-able (resolves), callable, and tolerant on any property —
-// stands in for expression-service results (AnimationInstance, handles, …) so
-// jibo-be's awaited expression calls resolve instead of hanging/throwing.
+// A value that is await-able (resolves), callable, and tolerant on
+// any property — stands in for expression-service results
+// (AnimationInstance, handles, …) so the runtime's awaited expression
+// calls resolve instead of hanging/throwing.
 function tolerant() {
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
@@ -135,8 +139,9 @@ function tolerant() {
   });
 }
 
-// A minimal event emitter matching jibo-typed-events' Event surface (on/once/
-// emit/off). Prefer the real class so the API is exact; fall back if unavailable.
+// A minimal event emitter matching the typed-events Event surface
+// (on/once/emit/off). Prefer the real class so the API is exact; fall
+// back if unavailable.
 function makeEmitter(Event, name) {
   if (Event) { try { return new Event(name); } catch (_) { /* fall through */ } }
   const hs = new Set();
@@ -151,22 +156,25 @@ function makeEmitter(Event, name) {
   };
 }
 
-// A stand-in for a jibo-expression-client AnimationInstance. The real one carries
-// `.events` (an AnimationEvents container of jibo-typed-events Events) that the
-// runtime + jibo-anim-db subscribe to (instance.events.{stopped,cancelled,…}.on).
-// A plain tolerant() proxy can't serve these — its lifecycle special-casing makes
-// `.events.cancelled` a Promise, so `.on`/`.once` aren't functions and the eye
-// animation path throws. Give `.events` REAL emitters; everything else stays
-// tolerant. On a play, fire `started` then `stopped` (next tick) so the playback's
-// completion promise resolves and the skill proceeds instead of awaiting forever.
+// A stand-in for an AnimationInstance. The real one carries `.events`
+// (an AnimationEvents container of typed Events) that the runtime
+// subscribes to (instance.events.{stopped,cancelled,…}.on). A plain
+// tolerant() proxy can't serve these — its lifecycle special-casing
+// makes `.events.cancelled` a Promise, so `.on`/`.once` aren't
+// functions and the eye animation path throws. Give `.events` REAL
+// emitters; everything else stays tolerant. On a play, fire `started`
+// then `stopped` (next tick) so the playback's completion promise
+// resolves and the skill proceeds instead of awaiting forever.
+//
 // Playback length (ms) of a .keys animation from its computed data.
-// jibo-keyframes.computeAnimObject output is:
+// computeAnimObject output is:
 //   { header:{...}, content:{ name, channels:[{dofName, length, times, values}], events } }
-// — each channel's `length` is the animation duration in seconds, and the
-// last entry of `times[]` is the final keyframe time. Use the max over all
-// channels for a sane upper bound; fall back to `data.duration / framerate`
-// if some pipeline ships the raw shape; finally 1500ms if everything's
-// missing (so a skill never stalls forever).
+// — each channel's `length` is the animation duration in seconds, and
+// the last entry of `times[]` is the final keyframe time. Use the max
+// over all channels for a sane upper bound; fall back to
+// `data.duration / framerate` if some pipeline ships the raw shape;
+// finally 1500ms if everything's missing (so a skill never stalls
+// forever).
 function animDurationMs(options) {
   try {
     const d = options && options.data;
@@ -506,12 +514,12 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     for (const c of channels) { const n = c.dofName || c.dof; if (n) out.push(n); }
     return out;
   })();
-  // Build a real animation-utilities DOFSet from the channel names. Required
-  // by jibo-anim-db.Playback.registerEventsAndHandlers' hasScreenDOFs check
-  // (jibo-anim-db.js:935-940) so face.eye.addAnimation actually fires for
-  // animations that touch screen/eye DOFs — without this, JiboJi PIXI
-  // overlays (coin-flip, applause, dance flourishes) never render because
-  // their TimelineLayers are never attached to the EyeContainer.
+  // Build a real animation-utilities DOFSet from the channel names.
+  // Required by anim-db Playback's hasScreenDOFs check so
+  // face.eye.addAnimation actually fires for animations that touch
+  // screen/eye DOFs — without this, JiboJi PIXI overlays (coin-flip,
+  // applause, dance flourishes) never render because their
+  // TimelineLayers are never attached to the EyeContainer.
   const animDofs = (() => {
     try {
       const ALL = jibo && jibo.expression && jibo.expression.dofs && jibo.expression.dofs.ALL;
@@ -524,7 +532,7 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     stopped = true;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     // Release DOFs to the arbiter so the next animation can claim them
-    // (matches DOFArbiter.ts:785 STOPPED/CANCELLED → TIMED_RELEASE).
+    // (STOPPED/CANCELLED → TIMED_RELEASE).
     try { dofArbiter.releaseInstance(arbiterInstance); } catch (_) { /* arbiter not inited */ }
     // Stop any host-side audio this animation started. Without this,
     // preempting a dance leaves its music playing while the next
@@ -589,9 +597,8 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     if (started || stopped) return;
     // Arbitrate before we mark started — if the policy says we can't
     // have ANY of our channels (with allOrNothing), reject without
-    // touching __activeAnimDofs. Mirrors AnimationInstance.play() at
-    // /tmp/sdk/.../expression/AnimationInstance.ts:35-50: PlayStatus
-    // REJECTED → emit REJECTED event, return without playing.
+    // touching __activeAnimDofs. PlayStatus REJECTED → emit REJECTED
+    // event, return without playing.
     const useReq = playRequestor || requestor || 'Behavior';
     const allowed = (channelDofs.length > 0)
       ? dofArbiter.attemptToClaimForInstance(useReq, arbiterInstance, channelDofs, { allOrNothing: true })
@@ -619,11 +626,12 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     const dur = animDurationMs(options);
     console.log('[live-eye] anim play: req=' + useReq + ' src=', (options && options.src) || '<inline>', 'dur=', dur, 'ms ch=', channelCount, channelCount ? '(' + summary + (channels.length > 6 ? ',...' : '') + ')' : '');
     setTimeout(() => emitStopped(), dur);
-    // Sample the animation's channels per frame and drive both the host body rig
-    // (postMessage 'dofs' for body sections + LED ring) and the local eye (push
-    // DOFs into jibo.face.eye.display). options.data is the same shape
-    // jibo-keyframes.computeAnimObject produces: { content: { channels: [{ dofName,
-    // times, values }] } } — value at time t is a piecewise-linear sample.
+    // Sample the animation's channels per frame and drive both the
+    // host body rig (postMessage 'dofs' for body sections + LED ring)
+    // and the local eye (push DOFs into jibo.face.eye.display).
+    // options.data is the same shape computeAnimObject produces:
+    // { content: { channels: [{ dofName, times, values }] } } — value
+    // at time t is a piecewise-linear sample.
     // Pass the events container so the data's timed events (play-audio →
     // music playback via KeysAnimation.onPlayAudio → Sound.play → host audio)
     // fire at the right beat. arbiterInstance is the audio-owner: any host-side
@@ -631,34 +639,36 @@ function makeAnimInstance(requireFn, play, options, requestor, jibo) {
     // set so cancellation can stop those audios via the host 'stop-sound' bridge.
     startDofPlayback(options, dur, () => stopped, events, arbiterInstance);
   };
-  // For createAndPlayAnimation, defer the initial play to a macrotask so the
-  // caller has time to assign anim.instance = Proxy (which subscribes
-  // KeysAnimation.onPlayTimeline / onPlayAudio to our events). The caller
-  // does that in the microtask after `await expression.createAndPlayAnimation`
-  // resumes; firing events synchronously here would dispatch t=0 play-pixi /
-  // play-audio events BEFORE the subscribe, jibo-typed-events drops them
-  // silently (no buffering — jibo-typed-events.js:70-77), and the coin-flip /
-  // JiboJi TimelineLayer is never created. setTimeout(0) goes to the
-  // macrotask queue, which runs strictly after the microtask queue drains —
-  // so KeysAnimation.set instance has subscribed by the time we fire events.
+  // For createAndPlayAnimation, defer the initial play to a macrotask
+  // so the caller has time to assign anim.instance = Proxy (which
+  // subscribes KeysAnimation.onPlayTimeline / onPlayAudio to our
+  // events). The caller does that in the microtask after
+  // `await expression.createAndPlayAnimation` resumes; firing events
+  // synchronously here would dispatch t=0 play-pixi / play-audio
+  // events BEFORE the subscribe, the typed-events bus drops them
+  // silently (no buffering), and the coin-flip / JiboJi TimelineLayer
+  // is never created. setTimeout(0) goes to the macrotask queue,
+  // which runs strictly after the microtask queue drains — so
+  // KeysAnimation.set instance has subscribed by the time we fire
+  // events.
   if (play) setTimeout(() => startPlayback(requestor), 0);
   const fn = function () { return tolerant(); };
   return new Proxy(fn, {
     get(t, p) {
       if (p === 'events') return events;
-      // dofs: real DOFSet built from this animation's channels. The bundle's
-      // anim-db Playback gates face.eye.addAnimation on a hasScreenDOFs
-      // check (jibo-anim-db.js:935-940) that does
-      // `dofsInScreen.minus(instance.dofs).getDOFs().length !== ...`. A
-      // tolerant proxy here breaks that check and addAnimation never fires
-      // → JiboJi PIXI overlays never render.
+      // dofs: real DOFSet built from this animation's channels. The
+      // bundle's anim-db Playback gates face.eye.addAnimation on a
+      // hasScreenDOFs check:
+      // `dofsInScreen.minus(instance.dofs).getDOFs().length !== ...`.
+      // A tolerant proxy here breaks that check and addAnimation never
+      // fires → JiboJi PIXI overlays never render.
       if (p === 'dofs') return animDofs;
       if (p === 'state') return cancelled ? 'CANCELLED' : (stopped ? 'STOPPED' : (started ? 'PLAYING' : 'INVALID'));
       if (p === 'then' || typeof p === 'symbol') return undefined;
-      // Real AnimationInstance.play(requestor) begins playback; same here for
-      // animations created via createAnimation() and played explicitly. The
-      // bundle passes a requestor string (jibo-expression-client.AnimationInstance.play
-      // line 59 — default 'Behavior'); thread it into the arbiter call.
+      // AnimationInstance.play(requestor) begins playback; same here
+      // for animations created via createAnimation() and played
+      // explicitly. The bundle passes a requestor string (default
+      // 'Behavior'); thread it into the arbiter call.
       if (p === 'play') return (req) => { startPlayback(req || requestor); return Promise.resolve(stopped && !started ? 'REJECTED' : 'OK'); };
       if (p === 'stop' || p === 'destroy' || p === 'cancel') return () => {
         emitStopped(p === 'cancel' ? 'cancelled' : undefined);
@@ -688,12 +698,10 @@ const EXPRESSION_METHODS = [
   'doCenterRobotOnDisconnect', 'subscribe', 'unsubscribe',
 ];
 
-// Build a real AcquireHandle the source returns from acquireTarget/awaitFace.
-// Source (Expression.ts:245-265, AcquireHandle.ts): the SSM returns an object
-// with .instanceId; the client wraps it so callers can later .release() to
-// drop the target. We return a shape with .release() that posts lookat-clear
-// to the host. The proxy stays tolerant for any other property access so
-// skills doing `handle.someExtension()` don't crash.
+// Build an AcquireHandle compatible with the expression API. Callers expect
+// an object with .release() that drops the target; we return a proxy that
+// posts a lookat-clear to the host and stays tolerant on any other property
+// access so skills calling extension methods don't crash.
 function makeAcquireHandle(onRelease) {
   let released = false;
   const release = () => {
@@ -713,12 +721,12 @@ function makeAcquireHandle(onRelease) {
     },
   });
 }
-// Extract a world-space target from acquireTarget/lookAt options. The source
+// Extract a world-space target from acquireTarget/lookAt options.
 // AcquireOptions accepts:
 //   - {position: {x,y,z}}  — direct world point
-//   - {entity: blackboardObj}  — track a moving entity (LPS face/sound source)
-// In our sim we don't track entities (no LPS visual_awareness stream), so we
-// fall back to whatever last-known position the entity carries, else null.
+//   - {entity: blackboardObj}  — track a moving entity
+// We don't run a visual-awareness stream here, so fall back to whatever
+// last-known position the entity carries, else null.
 function extractLookAtTarget(opts) {
   if (!opts) return null;
   if (opts.position && typeof opts.position.x === 'number') {
@@ -739,11 +747,8 @@ export function installExpressionStubs(jibo, requireFn) {
     if (!ex || ex.__stubbed) return;
     ex.__stubbed = true;
     // Initialize the DOFArbiter against the bundle's robot DOF universe.
-    // The expression service does this in ExpressionService.initDOFArbiter
-    // (using its own animate.getRobotInfo()); we use the same RobotInfo
-    // populateExpressionDofs already built (jibo.expression.dofs.ALL is
-    // a DOFSet whose getDOFs() lists every DOF, equivalent to the source's
-    // getRobotInfo().getDOFNames()).
+    // jibo.expression.dofs.ALL is a DOFSet whose getDOFs() lists every DOF —
+    // that's what populateExpressionDofs already built for us.
     try {
       let dofNames = [];
       const all = ex.dofs && ex.dofs.ALL;
@@ -782,12 +787,11 @@ export function installExpressionStubs(jibo, requireFn) {
         dofArbiter.centerWithHybridPriority(req, trustee, dofSet, opts.owners || null, false, () => resolve());
       } catch (_) { resolve(); }
     });
-    // blink — trigger a one-shot eye blink. Source (Expression.ts:321):
-    // expression.blink(interrupt?) → animate.blink() → drives the eye
-    // overlay's blink animation. In our port jibo.face.eye.blink() is
-    // available directly on the bundle's FaceRenderer; call it so
-    // skills that periodically blink (e.g. idle skill heartbeat,
-    // @be/who-am-i question pauses) produce visible blinks.
+    // blink — trigger a one-shot eye blink. expression.blink(interrupt?)
+    // → animate.blink() → drives the eye overlay's blink animation.
+    // jibo.face.eye.blink() is available directly on the bundle's
+    // FaceRenderer; call it so skills that periodically blink (e.g.
+    // idle heartbeat, question pauses) produce visible blinks.
     ex.blink = (interrupt) => {
       try {
         const eye = jibo && jibo.face && jibo.face.eye;
@@ -795,11 +799,11 @@ export function installExpressionStubs(jibo, requireFn) {
       } catch (_) { /* eye not ready */ }
       return Promise.resolve();
     };
-    // setLEDColor — drive the rig's lightring mesh. Source contract
-    // (Expression.ts:312-314): setLEDColor(colors:[number,number,number])
-    // with each component normalized [0,1]. Skills that pulse the ring
-    // (idle skill heartbeat, listening-state LED) now produce visible
-    // color changes on the viewport's lightring instead of vanishing.
+    // setLEDColor — drive the rig's lightring mesh.
+    // setLEDColor(colors:[number,number,number]) with each component
+    // normalized [0,1]. Skills that pulse the ring (idle heartbeat,
+    // listening-state LED) now produce visible color changes on the
+    // viewport's lightring instead of vanishing.
     ex.setLEDColor = (colors) => {
       try {
         if (Array.isArray(colors) && colors.length === 3) {
@@ -808,14 +812,14 @@ export function installExpressionStubs(jibo, requireFn) {
       } catch (_) { /* */ }
       return Promise.resolve();
     };
-    // acquireTarget — drive the body+eye lookat solver toward a world target.
-    // Source (Expression.ts:245-254) creates an AcquireHandle (server-side
-    // tracker that subscribes the attention manager to a target). Our impl
-    // posts the target to the host where createLookAtController's analytical
-    // IK solver (src/viewport/lookat.js) animates bottom/middle/top sections
-    // toward it. The returned handle's .release() drops the target so the
-    // rig returns to neutral. Many be skills use this for face-tracking
-    // (@be/introductions, @be/tutorial, @be/create, @be/circuit-saver).
+    // acquireTarget — drive the body+eye lookat solver toward a world
+    // target. The real impl creates an AcquireHandle (server-side
+    // tracker that subscribes the attention manager to a target). Our
+    // impl posts the target to the host where createLookAtController's
+    // analytical IK solver (src/viewport/lookat.js) animates
+    // bottom/middle/top sections toward it. The returned handle's
+    // .release() drops the target so the rig returns to neutral. Many
+    // skills use this for face-tracking.
     ex.acquireTarget = (opts) => {
       const tgt = extractLookAtTarget(opts);
       if (tgt) {
@@ -829,11 +833,11 @@ export function installExpressionStubs(jibo, requireFn) {
       });
       return Promise.resolve(handle);
     };
-    // awaitFace — wait for a face to be present at a target. The real impl
-    // is a long-poll on the LPS visual_awareness stream; we don't have one,
-    // so we drive the lookat for ~2s (simulating gaze acquisition) and then
-    // resolve. Returns an AcquireHandle compatible shape so skills calling
-    // .release() get the expected interface (Expression.ts:256-265).
+    // awaitFace — wait for a face to be present at a target. The real
+    // impl is a long-poll on the LPS visual_awareness stream; we
+    // don't have one, so we drive the lookat for ~2s (simulating gaze
+    // acquisition) and then resolve. Returns an AcquireHandle-compatible
+    // shape so skills calling .release() get the expected interface.
     ex.awaitFace = (opts) => {
       const tgt = extractLookAtTarget(opts);
       if (tgt) {
@@ -869,9 +873,9 @@ export function installExpressionStubs(jibo, requireFn) {
       const ch = data && data.content && Array.isArray(data.content.channels) ? data.content.channels.length : '-';
       return `src=${src} ch=${ch}`;
     };
-    // Both createAnimation and createAndPlayAnimation take the requestor as
-    // their second arg (jibo-expression-client.js:253 / Expression.ts:97-109).
-    // Default 'Behavior' matches AnimationInstance.play()'s default.
+    // Both createAnimation and createAndPlayAnimation take the
+    // requestor as their second arg. Default 'Behavior' matches
+    // AnimationInstance.play()'s default.
     ex.createAnimation = (opts, requestor = 'Behavior') => {
       console.log('[live-eye] createAnimation:', summarize(opts), 'req=' + requestor);
       return Promise.resolve(makeAnimInstance(requireFn, false, opts, requestor, jibo));
@@ -886,30 +890,30 @@ export function installExpressionStubs(jibo, requireFn) {
   } catch (e) { console.warn('[live-eye] installExpressionStubs failed:', e.message); }
 }
 
-// (installWebSpeech removed in M45 — the previous override of
-// jibo.embodied.speech.speak short-circuited the whole speak pipeline,
-// killing word-aligned eye motion + body posture shifts. Web Speech now
-// lives behind the /tts_speak HTTP endpoint (services/tts-service.js), so
-// the full embodied-dialog timeline drives expression animations against
-// real speech timing.)
+// Web Speech lives behind the /tts_speak HTTP endpoint
+// (services/tts-service.js), so the full embodied-dialog timeline
+// drives expression animations against real speech timing.
 
-// When a backend server is configured in the host UI (window.__JIBO_SERVER__),
-// connect the jetstream cloud client to it. jibo-be skips jetstream init under
-// UNIT_TESTS (and hardcodes localhost), so init the shared @jibo/jetstream-client
-// api ourselves, pointed at the Pegasus hub — ws://<server>:9000/events. The
-// hub's docker-compose maps host :9000 to container :8080 (Pegasus convention is
-// host ports in the 9000+ range; 8080 is internal-network only). cjs-require's
-// fake-ws passthrough routes that URL to a real browser WebSocket. Local Pegasus
-// has auth disabled by default, so no webTokenSecret is needed here.
-// jetstream-client ListenResult.fromJSON (jetstream-client.js:1200) only
-// preserves asr/nlu/match/transID. The on-robot @be/* skills (notably chitchat
-// InitState.addEmotionInfo at chitchat/index.js:909) read `data.asrResult
-// .NLParse.X` and `data.asrResult.Input` directly — fields the cloud's intent
-// router populates from entity tags in the matched rule. Our local NLU
-// registry stamps both, GlobalManager._serializeResult passes them through,
-// and this patch makes ListenResult.fromJSON carry them past the bundle-side
-// JSON round-trip so chitchat doesn't crash with `Cannot read properties of
-// undefined (reading 'valenceImpact')` and hang the FlowExecutor.
+// When a backend server is configured in the host UI
+// (window.__JIBO_SERVER__), connect the jetstream cloud client to it.
+// The runtime skips jetstream init under UNIT_TESTS (and hardcodes
+// localhost), so init the shared jetstream-client api ourselves,
+// pointed at the cloud hub — ws://<server>:9000/events. The hub's
+// docker-compose maps host :9000 to container :8080 (host ports in
+// the 9000+ range; 8080 is internal-network only). cjs-require's
+// fake-ws passthrough routes that URL to a real browser WebSocket.
+// Local hub has auth disabled by default, so no webTokenSecret is
+// needed here.
+//
+// ListenResult.fromJSON only preserves asr/nlu/match/transID. The
+// on-robot skills (notably chitchat's InitState.addEmotionInfo) read
+// `data.asrResult.NLParse.X` and `data.asrResult.Input` directly —
+// fields the cloud's intent router populates from entity tags in the
+// matched rule. Our local NLU registry stamps both, GlobalManager
+// passes them through, and this patch makes ListenResult.fromJSON
+// carry them past the bundle-side JSON round-trip so chitchat doesn't
+// crash with `Cannot read properties of undefined (reading
+// 'valenceImpact')` and hang the FlowExecutor.
 function patchListenResultFromJSON(js) {
   try {
     const LR = js && js.types && js.types.ListenResult;
@@ -931,20 +935,22 @@ export function connectCloud(requireFn) {
   const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
   try {
     const js = requireFn('@jibo/jetstream-client');
-    // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
+    // init lives on `.api` (what the JetstreamPlugin uses); fall back to top-level.
     const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
     if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
 
-    // Offline mode: no pegasus to connect to, but the jetstream-client's module-
-    // private `client` still needs `client.log` set, otherwise every voice-listen
-    // attempt (`client.log.warn('Disconnected, waiting for reconnect')` at
-    // jetstream-client.js:58) crashes with `Cannot read properties of undefined`.
-    // jibo-be's JetstreamPlugin DOES call api.init(...) on boot, but if jibo-log
-    // didn't resolve cleanly from inside the @jibo/jetstream-client bundle, the
-    // `new Log()` fallback at Client.init (jetstream-client.js:401) threw before
-    // this.log was assigned. Force-init with an explicit no-op log so the
-    // property is set regardless. Inside api.init's `if (client.initialized) return`,
-    // a second call is a no-op when jibo-be's init already succeeded.
+    // Offline mode: no hub to connect to, but the jetstream-client's
+    // module-private `client` still needs `client.log` set, otherwise
+    // every voice-listen attempt
+    // (`client.log.warn('Disconnected, waiting for reconnect')`)
+    // crashes with `Cannot read properties of undefined`. The
+    // runtime's JetstreamPlugin DOES call api.init(...) on boot, but
+    // if its log dependency didn't resolve cleanly, the `new Log()`
+    // fallback inside Client.init threw before this.log was assigned.
+    // Force-init with an explicit no-op log so the property is set
+    // regardless. Inside api.init's `if (client.initialized) return`,
+    // a second call is a no-op when the runtime's init already
+    // succeeded.
     if (!server) {
       const noopLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {},
                         createChild: () => noopLog };
@@ -955,17 +961,18 @@ export function connectCloud(requireFn) {
     }
     patchListenResultFromJSON(js);
 
-    // Track the active MIM Listen request. When a skill (e.g. @be/friendly-tips
-    // in its `wanna see more?` MIM) opens a Listen with non-launch rules, the
-    // cloud is waiting on THAT WS to receive the ASR/NLU for the answer. If our
-    // typed-chat path opens a separate startLocalTurn for "sure", the MIM's
-    // listen times out (SOS_TIMEOUT) and the answer lands on a new, ignored
-    // turn. By stashing the most-recent in-flight LocalTurnRequest on
-    // window.__activeListen, boot.js can call .update(text) to inject
-    // CLIENT_ASR into the existing turn instead — the cloud parses against
-    // the MIM's rules and returns the result on the same WS the MIM is
-    // waiting on. Skip turns whose only rule is `launch` (those are the
-    // out-of-mim fallback we ourselves start; updating them would loop).
+    // Track the active MIM Listen request. When a skill opens a
+    // Listen with non-launch rules (e.g. a "wanna see more?" prompt),
+    // the cloud is waiting on THAT WS to receive the ASR/NLU for the
+    // answer. If our typed-chat path opens a separate startLocalTurn
+    // for "sure", the MIM's listen times out (SOS_TIMEOUT) and the
+    // answer lands on a new, ignored turn. By stashing the most-recent
+    // in-flight LocalTurnRequest on window.__activeListen, boot.js
+    // can call .update(text) to inject CLIENT_ASR into the existing
+    // turn instead — the cloud parses against the MIM's rules and
+    // returns the result on the same WS the MIM is waiting on. Skip
+    // turns whose only rule is `launch` (those are the out-of-mim
+    // fallback we ourselves start; updating them would loop).
     try {
       const origStart = api.startLocalTurn;
       if (typeof origStart === 'function' && !api.__activeListenTracked) {
@@ -1031,16 +1038,19 @@ export function initOfflineServices(jibo, requireFn) {
   const tryInit = (obj, name) => { try { if (obj && obj.init) obj.init(jibo.log); } catch (e) { console.warn(`[live-eye] ${name}.init:`, e.message); } };
   if (jibo && jibo.lps) { tryInit(jibo.lps.identity, 'lps.identity'); tryInit(jibo.lps.detector, 'lps.detector'); }
 
-  // The action/goal system (jibo-action-system) creates its ActionRuntime singleton
-  // in init({jibo}); the ActionPlugin skips this in UNIT_TESTS, leaving _runtime
-  // undefined so goals (e.g. BeSkillSwitchGoal) crash on parent.dateProvider. init
-  // is local (goal providers + update loop on jibo.timer), so run it ourselves.
-  // Plug a noop `proactive` on the runtime after init: jibo-action-system reads
-  // pegasusProactiveTrigger from ITS OWN package.json (= false), so
-  // `_runtime.proactive` stays null and any skill calling
-  // `jibo.action.checkEnvironmentContext()` (e.g. @be/surprises in its open
+  // The action/goal system creates its ActionRuntime singleton in
+  // init({jibo}); the ActionPlugin skips this in UNIT_TESTS, leaving
+  // _runtime undefined so goals (e.g. BeSkillSwitchGoal) crash on
+  // parent.dateProvider. init is local (goal providers + update loop
+  // on jibo.timer), so run it ourselves.
+  //
+  // Plug a noop `proactive` on the runtime after init: the action
+  // module reads a proactiveTrigger flag from its own package.json
+  // (= false), so `_runtime.proactive` stays null and any skill
+  // calling `jibo.action.checkEnvironmentContext()` (e.g. in its open
   // hook) crashes with "Cannot read properties of null (reading
-  // 'checkEnvironmentInhibitors')". A noop returning [] keeps the skill alive.
+  // 'checkEnvironmentInhibitors')". A noop returning [] keeps the
+  // skill alive.
   try {
     if (jibo && jibo.action && jibo.action.init && !jibo.action.__inited) {
       jibo.action.__inited = true;
@@ -1063,9 +1073,10 @@ export function initOfflineServices(jibo, requireFn) {
       else installProactiveStub();
     }
   } catch (e) { console.warn('[live-eye] action.init:', e.message); }
-  // The KB loop is normally set up by the host (the original sim called kb.init +
-  // kb.initLoop). jibo-be assumes jibo.kb.loop exists (e.g. analytics
-  // listenForLoopChanges reads jibo.kb.loop.events). initLoop is connection-free.
+  // The KB loop is normally set up by the host (kb.init + kb.initLoop).
+  // The runtime assumes jibo.kb.loop exists (e.g. analytics
+  // listenForLoopChanges reads jibo.kb.loop.events). initLoop is
+  // connection-free.
   try {
     if (jibo && jibo.kb) {
       if (jibo.kb.init && !jibo.kb.httpUrl) jibo.kb.init({ host: '127.0.0.1', port: 0 }, () => {});
@@ -1073,13 +1084,14 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] kb init:', e.message); }
 
-  // InteractionMemoryPlugin (jibo.js:7734) skips under UNIT_TESTS — so
-  // jibo-interaction-memory's `exports._memory` is undefined. @be/greetings'
-  // ShouldDoMorningGreetingState calls `getTimeSinceLast(...)` and
-  // GreetingsSkill's session-create calls `noteEvent(...)`; both crash
-  // ("Cannot read properties of undefined (reading 'getTimeSinceLast' /
-  // 'noteEvent')") and the skill's first turn aborts. Init the singleton
-  // ourselves — it's connection-free (in-memory event list).
+  // InteractionMemoryPlugin skips under UNIT_TESTS — so the
+  // interaction-memory module's `exports._memory` is undefined. The
+  // greetings skill's ShouldDoMorningGreetingState calls
+  // `getTimeSinceLast(...)` and the session-create calls
+  // `noteEvent(...)`; both crash ("Cannot read properties of undefined
+  // (reading 'getTimeSinceLast' / 'noteEvent')") and the skill's first
+  // turn aborts. Init the singleton ourselves — it's connection-free
+  // (in-memory event list).
   try {
     const im = requireFn && requireFn('jibo-interaction-memory');
     if (im && im.api && typeof im.api.init === 'function' && !im._memory) {
@@ -1087,14 +1099,15 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] im.init:', e.message); }
 
-  // CloudResponseRegistry.cull (jetstream-client.js:541) rejects every entry
-  // that's been pending > 10s with an Error('Timeout … reached. Culling cloud
-  // response'). The ExtPromiseWrapper.reject hits the registry's internal
-  // Promise — but in our flow the Promise has no .catch (the matching
-  // SKILL_ACTION already arrived through our M47 direct path, or the entry
-  // is an orphan from a timed-out turn). Devtools then logs an unhandled
-  // rejection per cull cycle. Attach a global filter so the timeout reason
-  // is silently swallowed; any other rejection still surfaces.
+  // CloudResponseRegistry.cull rejects every entry that's been pending
+  // > 10s with an Error('Timeout … reached. Culling cloud response').
+  // The ExtPromiseWrapper.reject hits the registry's internal Promise
+  // — but in our flow the Promise has no .catch (the matching
+  // SKILL_ACTION already arrived through our direct path, or the entry
+  // is an orphan from a timed-out turn). Devtools then logs an
+  // unhandled rejection per cull cycle. Attach a global filter so the
+  // timeout reason is silently swallowed; any other rejection still
+  // surfaces.
   try {
     if (typeof window !== 'undefined' && !window.__cullSwallowInstalled) {
       window.__cullSwallowInstalled = true;
@@ -1126,13 +1139,13 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] console.time patch:', e.message); }
 
-  // ServicesPlugin (jibo.js) bundles three service-specific init functions —
-  // global-manager / kb / remote — and skips ALL of them under UNIT_TESTS. KB
-  // is already covered above; here we run the global-manager equivalent so
-  // jibo.globalEvents opens its /globals WebSocket (the cloud→skill-switch
-  // pipe) against our in-browser GlobalManagerService. Without this, every
-  // localTurnResult lands silently — the service has no connected client to
-  // broadcast to.
+  // ServicesPlugin bundles three service-specific init functions —
+  // global-manager / kb / remote — and skips ALL of them under
+  // UNIT_TESTS. KB is already covered above; here we run the
+  // global-manager equivalent so jibo.globalEvents opens its /globals
+  // WebSocket (the cloud→skill-switch pipe) against our in-browser
+  // GlobalManagerService. Without this, every localTurnResult lands
+  // silently — the service has no connected client to broadcast to.
   try {
     const gmRec = recordFor('global-manager');
     if (gmRec && jibo.globalEvents && typeof jibo.globalEvents.init === 'function' && !jibo.__globalEventsInited) {
@@ -1155,8 +1168,8 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] media.init:', e.message); }
 
-  // Cross-origin images (news thumbnails from report-skill SKILL_ACTIONs)
-  // load fine into <img> tags but PIXI's texImage2D fails ("SecurityError:
+  // Cross-origin images (e.g. news thumbnails from SKILL_ACTIONs) load
+  // fine into <img> tags but PIXI's texImage2D fails ("SecurityError:
   // image element contains cross-origin data, and may not be loaded") if
   // the remote server doesn't return Access-Control-Allow-Origin. Once one
   // texture upload fails, the sprite's _texture stays null and
@@ -1188,16 +1201,17 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] image proxy patch:', e.message); }
 
-  // Lifecycle.finished crashes under UNIT_TESTS: its init (jibo.js:7841)
-  // returns early without creating `this._client`, and every phase-end
-  // callsite (~10 places in jibo.js, plus skill graphs) does
+  // Lifecycle.finished crashes under UNIT_TESTS: its init returns
+  // early without creating `this._client`, and every phase-end
+  // callsite (across the runtime and skill graphs) does
   //   `this._client.send({ command: 'finished' })`
-  // which throws "Cannot read properties of undefined (reading 'send')".
-  // The error is non-fatal but recurring — every news headline / mim
-  // completion fires it, spamming hundreds of identical exceptions per
-  // skill. Replace finished() with a no-op that swallows the missing
-  // client. The ipc.send branch was already gated by Runtime.ipcRenderer
-  // and continues to work for the EventEmitter fallback.
+  // which throws "Cannot read properties of undefined (reading
+  // 'send')". The error is non-fatal but recurring — every news
+  // headline / mim completion fires it, spamming hundreds of
+  // identical exceptions per skill. Replace finished() with a no-op
+  // that swallows the missing client. The ipc.send branch was
+  // already gated by Runtime.ipcRenderer and continues to work for
+  // the EventEmitter fallback.
   try {
     const lc = jibo && jibo.lifecycle;
     if (lc && typeof lc.finished === 'function' && !lc.__webPatched) {
@@ -1248,7 +1262,7 @@ export function initOfflineServices(jibo, requireFn) {
         const callOpts = (typeof options === 'function') ? { complete: options } : (options || {});
         const src = this.src;
         // Two playback paths run side-by-side:
-        //   HOST     — new Audio(url).play() in the parent (M52). Always
+        //   HOST     — new Audio(url).play() in the parent. Always
         //              audible (parent has user activation from Start Jibo).
         //   IFRAME   — origPlay.call(...) below. Drives SoundInstance's Web
         //              Audio chain (bufferSource → gain → analyser → panner →
@@ -1267,13 +1281,9 @@ export function initOfflineServices(jibo, requireFn) {
         try {
           if (typeof src === 'string' && src && typeof window !== 'undefined' && window.parent) {
             const id = ++_seq;
-            // Rewrite to the HTTP-served path. mirrors cjs-require's mapUrl
-            // logic: paths under /node_modules/ get rebased onto the skill
-            // dir so external-skill bundle URLs resolve under our HTTP root.
-            // (the report-skill cloud SKILL_ACTION emits anim-db sound refs
-            //  like 'jibo-anim-db-animations/audio/sfx/.../*.ogg' which the
-            //  loader resolves to /node_modules/jibo-anim-db-animations/...
-            //  — that absolute path has to be served under our skill dir.)
+            // Rewrite to the HTTP-served path. Mirrors the require shim's
+            // url mapping: paths under /node_modules/ get rebased onto the
+            // skill dir so absolute bundle URLs resolve under our HTTP root.
             const skillDir = (typeof window !== 'undefined' && window.__SKILL_DIR__) || '';
             let url = src;
             const i = src.lastIndexOf('/node_modules/');
@@ -1330,28 +1340,12 @@ export function initOfflineServices(jibo, requireFn) {
     }
   } catch (e) { console.warn('[live-eye] sound mute failed:', e.message); }
 
-  // AnimDB: jibo's AnimDBPlugin (jibo.js:7463) calls `resolveAnimDB(jibo)`
-  // which walks node's Module._resolveFilename from process.cwd() to find
-  // jibo-anim-db-animations. In the browser that resolver has no usable
-  // cwd, so resolveAnimDB returns undefined and the plugin inits an EMPTY
-  // AnimDB (the "Module 'jibo-anim-db-animations' not found" warning at
-  // boot). With an empty AnimDB, every `<anim cat='dance' filter='&(music)'
-  // />` tag in skill prompts resolves to "no matching animations" and gets
-  // dropped from the timeline — only the auto-tagger's per-word posture
-  // shifts (CommaRule / NounRule etc., with bundled named animations) play,
-  // so the dance speak is ~1.5s of background motion and Jibo never
-  // actually dances.
-  //
-  // We can't re-init AFTER the plugin runs (initOfflineServices fires
-  // BEFORE jibo.init drives the plugin chain). Instead, monkey-patch
-  // animdb.api.init to auto-fill the path when the plugin calls it. Once
-  // patched, the plugin's `animdb.api.init(jibo)` becomes
-  // `animdb.api.init(jibo, <skill>/node_modules/jibo-anim-db-animations/animdb.json)`
-  // and readAndAddAnimCollection walks the ~66000-line manifest (via our
-  // cjs-require fs.open/fstat/read shims) and indexes everything by name,
-  // category, and meta. Subsequent embodied-dialog queries
-  // (`{ categories: ['dance'], includeSomeMeta: ['music'] }`) then return
-  // matching animations.
+  // AnimDB: the runtime's anim-db plugin tries to locate the animation
+  // manifest via node's module resolver, which has no usable cwd in the
+  // browser. Without a path, it inits an empty database — every animated
+  // tag in skill prompts then resolves to "no matching animations" and
+  // gets dropped from the timeline. Patch animDB.init so callers without
+  // an explicit path get the bundle-relative default filled in.
   try {
     if (jibo.animDB && typeof jibo.animDB.init === 'function' && !jibo.animDB.__webPatched) {
       jibo.animDB.__webPatched = true;
@@ -1423,16 +1417,18 @@ export function initOfflineServices(jibo, requireFn) {
   } catch (e) { console.warn('[live-eye] expression.init:', e.message); }
 }
 
-// BeSkill.init chains the framework's plugins and aborts the whole boot if any one
-// rejects; several (e.g. 'context', which stands up a jibo-service-framework server)
-// can't initialize in the browser. Make the chain tolerant so a failing plugin doesn't
-// block the skill launch. Call this only once @be/be-framework is loaded (don't
-// force-require it early — that breaks its own load order).
+// BeSkill.init chains the framework's plugins and aborts the whole
+// boot if any one rejects; several (e.g. 'context', which stands up a
+// service-framework server) can't initialize in the browser. Make the
+// chain tolerant so a failing plugin doesn't block the skill launch.
+// Call this only once the framework is loaded (don't force-require it
+// early — that breaks its own load order).
 export function patchBeFramework(requireFn) {
-  // jibo-be's in-process service servers (e.g. ContextService) extend
-  // jibo-service-framework's HTTPService and can't bind a real socket in-browser
-  // (init throws). Make the server init resolve without binding — clients reach
-  // services through our bus/interceptors, not these servers.
+  // The runtime's in-process service servers (e.g. ContextService)
+  // extend service-framework's HTTPService and can't bind a real
+  // socket in-browser (init throws). Make the server init resolve
+  // without binding — clients reach services through our bus/
+  // interceptors, not these servers.
   try {
     const sf = requireFn && requireFn('jibo-service-framework');
     for (const cls of ['HTTPService', 'HTTPWSService', 'HTTPSWSService']) {
@@ -1464,13 +1460,15 @@ export function patchBeFramework(requireFn) {
   return false;
 }
 
-// Provide the eye's DOF stream (the expression service the robot would run). The
-// real ViewManager owns rendering (it shows the EyeView, MenuView, etc., driven by
-// the FaceRenderer's update loop), so we DON'T mount/force anything — we just apply
-// the eye's default textures once (the shared loader is saturated by jibo-be's anim
-// preload) and stream the idle pose into face.eye.display, exactly as the expression
-// service's dofs event would. This lets the eye AND the menu/views render naturally,
-// and the EyeView's touch handler reach onTouch -> MainMenu.
+// Provide the eye's DOF stream (the expression service the robot
+// would run). The real ViewManager owns rendering (it shows the
+// EyeView, MenuView, etc., driven by the FaceRenderer's update loop),
+// so we DON'T mount/force anything — we just apply the eye's default
+// textures once (the shared loader is saturated by the runtime's anim
+// preload) and stream the idle pose into face.eye.display, exactly as
+// the expression service's dofs event would. This lets the eye AND
+// the menu/views render naturally, and the EyeView's touch handler
+// reach onTouch -> MainMenu.
 export function driveEye(jibo, prep) {
   console.log('[live-eye] streaming idle DOFs to the eye (view-managed)');
   const dofs = prep.dofs;
@@ -1522,13 +1520,13 @@ export function driveEye(jibo, prep) {
         }
       }
       // Populate sourceTimes for any animation EyeContainer is tracking.
-      // EyeContainer.display (jibo.js:10046) consults meta.sourceTimes
-      // to (1) detect a pending anim ready to swap in, and (2) drive the
-      // current animation's update(time, dofValues) — which runs each
-      // TimelineLayer.update so PIXI overlays (JiboJis, dance flourishes,
-      // the coin-flip sprites) animate frame-by-frame. Without this the
-      // pending swap never happens; layers never get addChild'd to the
-      // EyeContainer; the screen stays blank.
+      // EyeContainer.display consults meta.sourceTimes to (1) detect a
+      // pending anim ready to swap in, and (2) drive the current
+      // animation's update(time, dofValues) — which runs each
+      // TimelineLayer.update so PIXI overlays (JiboJis, dance
+      // flourishes, the coin-flip sprites) animate frame-by-frame.
+      // Without this the pending swap never happens; layers never get
+      // addChild'd to the EyeContainer; the screen stays blank.
       // The time value is in SECONDS, used by TimelineLayer.update as
       // `time - this.startTime` to compute the current frame. As long as
       // it advances monotonically at real-time rate, the timelines run

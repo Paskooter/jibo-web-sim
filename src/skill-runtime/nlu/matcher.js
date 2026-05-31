@@ -4,7 +4,7 @@
 // each possible parse position the AST can reach starting from a given
 // input position, so the caller can pick the first/longest/highest-priority
 // match. For our purposes the FIRST successful end-of-input parse wins —
-// matching the cloud's first-match-wins behaviour on the IntentRouter side.
+// matching the cloud's first-match-wins behaviour on the intent-router side.
 //
 // Each yielded result is { end: number, entities: object, subFields: object }:
 //   end       — input position after the match
@@ -49,9 +49,8 @@ function _norm(s) { return String(s).toLowerCase().replace(/['’]/g, ''); }
 // producing entity updates for the parent. `lit` tags drop their value as-is;
 // `subfield` tags read SubRule._field from `subFields`. `op` is 'set' (the
 // `=` operator, overwriting) or 'append' (the `+=` operator, concatenating
-// to whatever the same key already holds in this scope). Append is how the
-// chitchat rule composes mimIds: `{_mimId='RA_JBO_'}{_mimId += ENT._entity}`
-// → `RA_JBO_TellAJoke`.
+// to whatever the same key already holds in this scope). Append is how
+// on-robot rules compose mim ids from a prefix plus the matched entity name.
 function applyTags(tags, prevEntities, prevSubFields, subFields) {
   if (!tags || tags.length === 0) return { entities: prevEntities, subFields: prevSubFields };
   const ent = freshEnts(prevEntities);
@@ -221,11 +220,10 @@ function mergeObj(a, b) {
   return Object.assign({}, a, b);
 }
 
-// Expand a char-class body into all literal word variants. The cloud's
-// charrulecontent grammar (jibo-nlu compiler.ypp:196-204) accepts the SAME
-// constructs as the outer rule grammar — concatenation, `|` alternation,
-// `?X` optionals, `(...)` grouping — applied character-by-character with no
-// inter-token space. So:
+// Expand a char-class body into all literal word variants. The char-class
+// body accepts the same constructs as the outer rule grammar — concatenation,
+// `|` alternation, `?X` optionals, `(...)` grouping — applied
+// character-by-character with no inter-token space. So:
 //   `[salutation?s]`   → ['salutation', 'salutations']
 //   `[danc(e|(ing))]`  → ['dance', 'dancing']
 //   `[do?(ing)]`       → ['do', 'doing']

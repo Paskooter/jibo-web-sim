@@ -1,9 +1,6 @@
 // Host-side skill loader. Discovers a skill from its package.json manifest
-// (the same "jibo" block jibo-cli's package generator emits) and resolves the
-// entry the iframe should load plus the metadata to surface in the UI.
-//
-// Mirrors how the original simulator resolved a skill via `get-skill-path`
-// (jibo-cli/src/simulator/index.ts) + the package.json jibo config.
+// (using the standard "jibo" block) and resolves the entry the iframe should
+// load plus the metadata to surface in the UI.
 
 export async function loadSkillManifest(baseDir) {
   const dir = baseDir.replace(/\/$/, '');

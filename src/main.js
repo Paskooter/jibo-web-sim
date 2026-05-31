@@ -1,4 +1,4 @@
-// Entry point. Boots the 3D viewport, the sidebar tabs, and (M2) the skill
+// Entry point. Boots the 3D viewport, the sidebar tabs, and the skill
 // runtime: a sandboxed iframe whose `jibo.*` calls are bridged to host-side
 // services, with its face projected onto Jibo's 3D screen.
 // Vanilla ESM, no framework, no bundler.
@@ -28,9 +28,10 @@ import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 
 // Order matters: the picker shows entries in this order, and applySkill() at
-// boot picks the first one whose manifest loads successfully. jibo-be is first
-// so it boots by default when present; the hand-written demo bundles are the
-// fallback (developing or sharing the sim without the be bundle checked out).
+// boot picks the first one whose manifest loads successfully. The real Jibo
+// runtime bundle is first so it boots by default when present; the
+// hand-written demo bundles are the fallback for development or sharing the
+// sim without the real bundle checked out.
 const SKILLS = ['/external-skills/jibo-be', '/skills/hello-world', '/skills/fortune-teller'];
 let switchSkill = () => {};   // assigned once the runtime is up
 
@@ -67,9 +68,9 @@ installNotificationsPanel(panelsEl.querySelector('[data-panel="notes"]'), {
   onPush: (n) => pushNotification(n),
 });
 
-// Backend server address (e.g. a Pegasus cloud at `pegasus.jibo`). Persisted and
-// passed to the skill iframe so the runtime can route cloud requests there.
-// Changing it reloads the current skill so the new address takes effect.
+// Backend server address (the cloud hub). Persisted and passed to the skill
+// iframe so the runtime can route cloud requests there. Changing it reloads
+// the current skill so the new address takes effect.
 const serverInput = document.getElementById('server-addr');
 const getServer = () => (localStorage.getItem('jibo-server') || '').trim();
 serverInput.value = getServer();
@@ -80,8 +81,8 @@ serverInput.addEventListener('change', () => {
 
 // Skill picker — populated from each bundle's manifest (display-name).
 // Tracks the first dir whose manifest loaded so the boot can default to a
-// present skill rather than blindly picking SKILLS[0] (which might be
-// jibo-be on a checkout that doesn't have /external-skills/jibo-be cloned).
+// present skill rather than blindly picking SKILLS[0] (which might point at
+// a bundle not present in the current checkout).
 const skillPicker = document.getElementById('skill-picker');
 let firstLoadedDir = null;
 const skillsReady = (async () => {
@@ -121,16 +122,16 @@ function showPhoto(dataUrl) {
   photoTimer = setTimeout(() => { photoEl.hidden = true; }, 3500);
 }
 
-statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · loading model…`;
+statusEl.textContent = `three.js r${viewport.threeRevision} · loading model…`;
 
 viewport.rig.ready
   .then(() => {
-    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · click Start`;
+    statusEl.textContent = `three.js r${viewport.threeRevision} · click Start`;
     showStartGate();
   })
   .catch((err) => {
     console.error('Jibo model load failed:', err);
-    statusEl.textContent = `M5 · three.js r${viewport.threeRevision} · model load FAILED — see console`;
+    statusEl.textContent = `three.js r${viewport.threeRevision} · model load FAILED — see console`;
   });
 
 // A "power-on" gate: browsers block audio until the user interacts with the
@@ -165,11 +166,11 @@ async function startSkillRuntime() {
   iframe.style.pointerEvents = 'none';   // let OrbitControls own the viewport
   viewportEl.appendChild(iframe);
 
-  // Real-runtime skills (jibo-be) speak via SpeechSynthesis in THIS window — the
+  // Real-runtime skills speak via SpeechSynthesis in THIS window — the
   // skill iframe is sandboxed so speech there is silent. The skill posts
   // {kind:'speak', id, text}; we utter it and post {kind:'speak-done', id} back
   // when it ends so the skill paces to real speech. Keep utterance refs alive to
-  // dodge the Chromium GC-cancels-speech bug.
+  // dodge a known Chromium GC-cancels-speech bug.
   const synth = window.speechSynthesis;
   const liveUtters = new Set();
   // id (from iframe's play-sound) -> Audio element currently playing in
@@ -249,30 +250,28 @@ async function startSkillRuntime() {
         try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'sound-done', id: m.id }, '*'); } catch (_) { /* gone */ }
       }
     } else if (m.kind === 'lookat-target' && m.target) {
-      // jibo-be skill is calling jibo.expression.acquireTarget({position}) or
+      // Skill is calling jibo.expression.acquireTarget({position}) or
       // .lookAt(...). Drive the rig's Lookat solver (analytical per-joint IK
-      // with acceleration limits — same algorithm as animation-utilities'
-      // Lookat — see src/viewport/lookat.js) toward the world-space point.
-      // Body sections (bottom/middle/top) animate smoothly; the eye gets
-      // residual gaze for what the body mechanism can't physically reach.
+      // with acceleration limits — see src/viewport/lookat.js) toward the
+      // world-space point. Body sections (bottom/middle/top) animate smoothly;
+      // the eye gets residual gaze for what the body mechanism can't
+      // physically reach.
       beTarget = { x: m.target.x, y: m.target.y, z: m.target.z };
       applyAttention();
     } else if (m.kind === 'lookat-clear') {
       // Skill released its lookAt handle (AcquireHandle.release(), or the
-      // returned-handle's owner finished). Clear the be-side attention; the
+      // returned-handle's owner finished). Clear the skill-side attention; the
       // lower-precedence lpsTarget (if any) takes over, else lookat goes idle.
       beTarget = null;
       applyAttention();
     } else if (m.kind === 'led-color' && Array.isArray(m.rgb) && m.rgb.length === 3 && viewport.rig.setLEDColor) {
-      // jibo.expression.setLEDColor([r,g,b]) from a skill — the real bundle
-      // drives the lightring's color/intensity DOFs at the expression service
-      // level; we drive the rig's lightring mesh directly with the same
-      // [0,1]-normalized RGB tuple the source contract specifies
-      // (Expression.ts:312-314 setLEDColor(colors:[number,number,number])).
+      // jibo.expression.setLEDColor([r,g,b]) from a skill — we drive the rig's
+      // lightring mesh directly with the [0,1]-normalized RGB tuple the public
+      // API takes.
       const [r, g, b] = m.rgb;
       try { viewport.rig.setLEDColor(r, g, b); } catch (_) { /* */ }
     } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
-      // jibo-be animation playback (expression.createAndPlayAnimation) — the
+      // Animation playback (jibo.expression.createAndPlayAnimation) — the
       // skill-runtime samples the animation's channels per frame and posts the
       // resulting DOF map here so the body rig actually moves. Only the body
       // sections + LED ring channels apply to the host viewport; eye DOFs are
@@ -315,9 +314,9 @@ async function startSkillRuntime() {
   const asr = createAsrService({ emit: (event, data) => bridge.emit('asr', event, data) });
   bridge.register('asr', asr.service);
   // Typed chat input goes to the skill as recognized speech: ASR.recognize for
-  // shim skills, and also into the iframe so real-runtime jibo-be can inject it
-  // via MimManager.handleSpeech — the same path the original simulator used to
-  // turn typed lines into user utterances.
+  // shim skills, and also into the iframe so the real runtime can inject it
+  // through the MIM speech path — the same path used to turn typed lines into
+  // user utterances.
   chat.setSendHandler((text) => {
     asr.recognize(text);
     try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'utterance', text }, '*'); } catch (_) { /* iframe gone */ }
@@ -398,7 +397,7 @@ async function startSkillRuntime() {
     rig: viewport.rig,
     screenMesh,
     emitFace: (event, data) => bridge.emit('face', event, data),
-    // Real-runtime eye DOFs: jibo-be's PixiJS FaceRenderer expects
+    // Real-runtime eye DOFs: the FaceRenderer expects
     // eyeSubRootBn_t / eyeSubRootBn_t_2 (iris screen translation) per
     // frame; live-eye.js writes them into __activeAnimDofs so driveEye
     // mixes them into face.eye.display. Skip when an animation is
@@ -415,8 +414,8 @@ async function startSkillRuntime() {
 
   // Attention sources, highest precedence first:
   //   - audioAttention: transient glance toward an audio event (~1s)
-  //   - beTarget:       jibo-be skill calling jibo.expression.acquireTarget
-  //                     (lookAt/awaitFace etc. in real-runtime mode)
+  //   - beTarget:       real-runtime skill calling jibo.expression.acquireTarget
+  //                     (lookAt/awaitFace etc.)
   //   - lpsTarget:      persistent target from SHIM-mode jibo.lps.target.set
   let lpsTarget = null;
   let audioAttention = null;
@@ -482,11 +481,12 @@ async function startSkillRuntime() {
       if (skillPicker.value !== dir) skillPicker.value = dir;
     } catch (err) {
       console.error('skill load failed:', err);
-      statusEl.textContent = `M11 · three.js r${viewport.threeRevision} · skill load FAILED — see console`;
+      statusEl.textContent = `three.js r${viewport.threeRevision} · skill load FAILED — see console`;
     }
   }
   switchSkill = applySkill;
   // Wait for the picker to finish probing manifests, then pick the first
-  // one that actually loaded (defaults to jibo-be when present per SKILLS[0]).
+  // one that actually loaded (defaults to the real-runtime bundle when
+  // present per SKILLS[0]).
   skillsReady.then(() => applySkill(firstLoadedDir || SKILLS[0]));
 }

@@ -1,5 +1,5 @@
 // jibo.flow — the flow (state-machine) engine, running client-side in the skill
-// iframe. Faithful to sdk-archive/jibo/src/flow: a FlowExecutor walks a graph of
+// iframe. Faithful to the public jibo.flow API: a FlowExecutor walks a graph of
 // activities (READY -> IN_PROGRESS -> DONE), following the transition whose text
 // matches the finished activity's result, until a Flow.End / no transition.
 //

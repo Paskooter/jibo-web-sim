@@ -1,13 +1,12 @@
 // nlu service — fulfils jibo.nlu.parseFromRule / compile / parseFromURI.
 //
-// The original NLU was an FST grammar parser (a C++ binding; see
-// sdk-archive/jibo-cli/src/simulator/client/services/nlu-service.ts). Full FST
-// is out of scope here — this is a lightweight intent matcher that returns the
-// same result shape the public API promises:
+// The on-device NLU is a full FST grammar parser. Full FST is out of scope
+// here — this is a lightweight intent matcher that returns the same result
+// shape the public API promises:
 //
 //   { Input: string, NLParse: object, heuristic_score: number }
 //
-// Rule formats accepted (kept simple, extended in M3 when Chat routes ASR in):
+// Rule formats accepted:
 //   - string:  pipe/newline-separated alternative phrases; the best
 //              token-overlap match wins, its phrase is the matched "intent".
 //   - object:  { intents: { name: ["phrase one", "phrase two", ...] } };

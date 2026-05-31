@@ -1,6 +1,6 @@
 // media service — photo storage (jibo.media).
 //
-// Mirrors sdk-archive/jibo dts/media.d.ts: storePhoto / getPhoto / getUrlById.
+// Implements the public photo API: storePhoto / getPhoto / getUrlById.
 // jibo.lps.takePhoto captures the viewport and stores the data URL here; skills
 // retrieve it by id. (Video recording is out of scope for the web sim.)
 //

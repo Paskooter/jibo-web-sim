@@ -1,17 +1,18 @@
-// In-memory RPC bus connecting jibo-be's service clients to local service
-// implementations — the in-browser stand-in for the original simulator's
-// localhost service processes (skills-service-manager). No real ws/http sockets.
+// In-memory RPC bus connecting the runtime's service clients to local
+// service implementations — the in-browser stand-in for the on-device
+// localhost service processes. No real ws/http sockets.
 //
-// jibo-be talks to services through jibo-client-framework's RegistryClient (HTTP
-// service discovery) + RemoteClient (per-service WebSocket RPC). We patch those —
-// the SAME classes jibo-be's bundle uses (resolved via the bundle's require) — so
-// every service RPC dispatches to a local impl and every service event is pushed
-// back through the client's normal event machinery.
+// The runtime talks to services through a RegistryClient (HTTP service
+// discovery) + RemoteClient (per-service WebSocket RPC). We patch those
+// — the SAME classes the bundle uses (resolved via the bundle's
+// require) — so every service RPC dispatches to a local impl and every
+// service event is pushed back through the client's normal event
+// machinery.
 //
-// Protocol (from jibo-client-framework RemoteClient): a request is
-// {type:'request', messageId, instanceId, methodName, args, sendAndForget}; the
-// reply resolves the caller; events are {type:'event', instanceId, args} routed by
-// RemoteClient.onEvent -> the ClientRemoteObject registered in client.instances.
+// Protocol: a request is {type:'request', messageId, instanceId,
+// methodName, args, sendAndForget}; the reply resolves the caller;
+// events are {type:'event', instanceId, args} routed via
+// RemoteClient.onEvent -> the registered ClientRemoteObject.
 
 export class ServiceBus {
   constructor() {
@@ -60,9 +61,10 @@ export class ServiceBus {
     try { return Promise.resolve(entry.impl.handleHttp(method, path, body)); } catch (e) { return Promise.reject(e); }
   }
 
-  // Route XHR to our HTTP services. jibo-be's HTTP service clients use raw
-  // XMLHttpRequest to http://<host>:<busPort>/<path>; intercept only those and
-  // synthesize the response, proxying every other request to the native XHR.
+  // Route XHR to our HTTP services. The runtime's HTTP service clients
+  // use raw XMLHttpRequest to http://<host>:<busPort>/<path>; intercept
+  // only those and synthesize the response, proxying every other
+  // request to the native XHR.
   installHttpInterceptor() {
     if (typeof window === 'undefined' || window.__busXhrPatched) return;
     window.__busXhrPatched = true;
@@ -134,10 +136,10 @@ export class ServiceBus {
     this.clientsByPort.get(port).add(client);
   }
 
-  // Patch jibo-client-framework's RegistryClient + RemoteClient (idempotent).
+  // Patch the runtime's client-framework RegistryClient + RemoteClient (idempotent).
   install(requireFn) {
     let cf;
-    try { cf = requireFn('jibo-client-framework'); } catch (e) { console.warn('[bus] jibo-client-framework not loadable:', e.message); return; }
+    try { cf = requireFn('jibo-client-framework'); } catch (e) { console.warn('[bus] client framework not loadable:', e.message); return; }
     const bus = this;
 
     const RegistryClient = cf.RegistryClient;

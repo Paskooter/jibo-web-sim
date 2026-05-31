@@ -20,7 +20,7 @@ export function installTabs(tabsEl, panelsEl) {
   // Seed each empty panel with a placeholder so it isn't visually blank.
   for (const p of panels) {
     if (p.childElementCount === 0) {
-      p.textContent = `${p.dataset.panel} — not implemented yet (M0)`;
+      p.textContent = `${p.dataset.panel} — not implemented yet`;
     }
   }
 

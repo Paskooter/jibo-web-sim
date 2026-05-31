@@ -1,7 +1,7 @@
 // Jibo's eye, rendered to a <canvas> inside the skill iframe.
 //
-// Not the real PixiJS eye (sdk-archive/jibo/src/rendering/eye/*) — a faithful
-// stand-in: the iconic single glowing cyan disc on a black screen, with idle
+// Not the real PixiJS eye — a faithful stand-in: the iconic single
+// glowing cyan disc on a black screen, with idle
 // breathing + auto-blink, smooth look tracking, and a talking pulse. The
 // canvas fills the logical 1280×720 face; the face-overlay projects it onto
 // Jibo's 3D screen quad.

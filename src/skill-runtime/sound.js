@@ -1,6 +1,6 @@
 // jibo.sound — client-side audio, implemented in the skill iframe (like the
-// eye, it needs no host round-trip). API mirrors sdk-archive/jibo dts/sound.d.ts
-// so skills written against it work unchanged: add/play/stop/pause/resume,
+// eye, it needs no host round-trip). API mirrors the public jibo.sound
+// surface so skills written against it work unchanged: add/play/stop/pause/resume,
 // *All helpers, Sound / SoundInstance, SoundUtils.sineTone. File sounds use
 // HTMLAudioElement (src resolved relative to the skill bundle); sineTone uses
 // Web Audio. Audio is unblocked by the host's "Start" gesture.

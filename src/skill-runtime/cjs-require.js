@@ -37,13 +37,15 @@ export function createRequire(jibo) {
     // Optional native addons (ws speedups) that don't exist in the browser; stub
     // them so the resolver doesn't probe (and 404) the whole node_modules tree.
     bufferutil: {}, 'utf-8-validate': {},
-    // Node-server/native-only deps jibo-be pulls in but can't use in-browser
-    // (express static file serving; icecast audio streaming). Stub to avoid load errors.
+    // Node-server/native-only deps the runtime pulls in but can't use
+    // in-browser (express static file serving; icecast audio streaming).
+    // Stub to avoid load errors.
     send: () => ({ on() { return this; }, pipe() {} }), icecast: { Client: function () {}, Reader: function () {}, Writer: function () {} },
-    // In-memory WebSocket (the `ws` package). jibo-be's service clients open ws
-    // channels (body/notifications/lps); with no server they'd error + reconnect
-    // forever. This connects silently and routes to local channel handlers
-    // registered on window.__wsServers (so ported services can push messages).
+    // In-memory WebSocket (the `ws` package). The runtime's service clients
+    // open ws channels (body/notifications/lps); with no server they'd
+    // error + reconnect forever. This connects silently and routes to
+    // local channel handlers registered on window.__wsServers (so
+    // ported services can push messages).
     ws: makeFakeWs(),
   };
 
@@ -164,9 +166,10 @@ export function createRequire(jibo) {
     }
   }
 
-  // The real jibo-plugins PathUtils.resolve() uses node's Module internals to
-  // locate packages (e.g. 'animation-utilities' for the eye textures). Back them
-  // with our own resolver so those lookups return real paths instead of null.
+  // The runtime's PathUtils.resolve() uses node's Module internals to
+  // locate packages (e.g. 'animation-utilities' for the eye textures).
+  // Back them with our own resolver so those lookups return real paths
+  // instead of null.
   // node's require('module') returns the Module constructor (self-referential:
   // Module.Module === Module) with static _resolveFilename/_nodeModulePaths.
   builtins.module._nodeModulePaths = function (fromDir) {
@@ -240,20 +243,20 @@ function tolerantStub() {
   });
 }
 
-// fs whose reads resolve over HTTP. Absolute bundle paths (…/node_modules/x/y)
-// are rebased onto the skill's served root (window.__SKILL_DIR__), so the real
-// jibo LocalLoader's fs.readFile(uri, encoding, cb) loads eye textures etc.
+// fs whose reads resolve over HTTP. Absolute bundle paths
+// (…/node_modules/x/y) are rebased onto the skill's served root
+// (window.__SKILL_DIR__), so the runtime's loader fs.readFile(uri,
+// encoding, cb) loads eye textures etc.
 function makeHttpFs() {
-  // Animation textures (White_Eye.png etc.) shipped under
-  // jibo-anim-db-animations get referenced by KeysAnimation against the
-  // playing skill's assetPack root — so a dance animation queued by
-  // @be/idle looks for it at @be/idle/animations/textures/X. Nimbus
-  // tripped this first (M57's server-side redirect); every @be/* skill
-  // that plays an anim-db named animation will reproduce the same
-  // ENOENT. Rewrite at the fs layer (not just at express) because
-  // knownMissing() consults the skill manifest BEFORE the fetch fires,
-  // so the unrewritten path fails the manifest check and synthesizes
-  // ENOENT before HTTP ever sees the URL.
+  // Animation textures (White_Eye.png etc.) shipped under the shared
+  // anim-db get referenced by KeysAnimation against the playing skill's
+  // assetPack root — so a dance animation queued by the idle skill
+  // looks for it at <idle>/animations/textures/X. Every on-robot
+  // skill that plays an anim-db named animation will reproduce the
+  // same ENOENT. Rewrite at the fs layer (not just at express)
+  // because knownMissing() consults the skill manifest BEFORE the
+  // fetch fires, so the unrewritten path fails the manifest check
+  // and synthesizes ENOENT before HTTP ever sees the URL.
   const ANIM_DB_TEX = '/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/';
   // Capture the SUBPATH after animations/textures/ — not just a single
   // filename — because anim-db textures are organized in subdirectories
@@ -307,7 +310,7 @@ function makeHttpFs() {
       return r.arrayBuffer().then((b) => cb(null, new Uint8Array(b)));
     }).catch((e) => cb(e));
   }
-  // Synchronous reads (jibo-plugins PathUtils.findRoot walks up for package.json)
+  // Synchronous reads (PathUtils.findRoot walks up for package.json)
   // are served by synchronous XHR against the mapped HTTP URL.
   const syncCache = new Map();    // url -> text | null (findRoot probes the same paths repeatedly)
   function getSync(url, binary) {
@@ -338,11 +341,12 @@ function makeHttpFs() {
     if (binary) { let bin = ''; for (let i = 0; i < text.length; i += 1) bin += String.fromCharCode(text.charCodeAt(i) & 0xff); return btoa(bin); }
     return text;
   }
-  // fd-based reads (jibo-cai-utils.FileUtils.readFile opens, fstats, chunk-reads,
-  // closes — used to load the 1MB AnimDB). open fetches the whole file once.
-  // Directory paths get a marker fd so fstat reports isDirectory()=true — this
-  // is what FileUtils.findAllFilesWithExt uses to walk into subdirs (chitchat
-  // populates its scriptedResponseMiMSet that way at postInit).
+  // fd-based reads (FileUtils.readFile opens, fstats, chunk-reads,
+  // closes — used to load the 1MB AnimDB). open fetches the whole file
+  // once. Directory paths get a marker fd so fstat reports
+  // isDirectory()=true — this is what FileUtils.findAllFilesWithExt
+  // uses to walk into subdirs (chitchat populates its
+  // scriptedResponseMiMSet that way at postInit).
   const fds = new Map();
   let fdSeq = 1;
   function isDirInManifest(url) {
@@ -424,16 +428,16 @@ function makeHttpFs() {
       if (isDirInManifest(u)) return cb && cb(null, { isFile: () => false, isDirectory: () => true, size: 0 });
       return cb && cb(null, { isFile: () => true, isDirectory: () => false, size: 0 });
     },
-    // fs-extra extras (jibo-log etc. call these for log dirs); no real FS, so no-op.
+    // fs-extra extras (log libs call these for log dirs); no real FS, so no-op.
     ensureDirSync: () => {}, ensureDir: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     ensureFileSync: () => {}, mkdirpSync: () => {}, mkdirp: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     outputFile: (p, d, cb) => { if (cb) cb(null); }, outputFileSync: () => {}, removeSync: () => {}, remove: (p, cb) => { const f = typeof p === 'function' ? p : cb; if (f) f(null); },
     open, fstat, read, close,
-    // readdir / readdirSync walk the manifest. Used by jibo-cai-utils
+    // readdir / readdirSync walk the manifest. Used by
     // FileUtils.findAllFilesWithExt to populate chitchat's scripted /
-    // emotion mim sets at postInit (chitchat/index.js:329-332). Without
-    // this the sets stayed empty and every scripted-response lookup missed
-    // even when the rule produced the right mim ID.
+    // emotion mim sets at postInit. Without this the sets stayed empty
+    // and every scripted-response lookup missed even when the rule
+    // produced the right mim ID.
     readdir: (p, cb) => {
       const f = typeof cb === 'function' ? cb : (typeof p === 'function' ? p : null);
       if (!f) return;
@@ -535,18 +539,18 @@ function makeUrl() {
 // http/https that fail fast: any request emits 'error' on the next tick so
 // callbacks fire (callers treat the service as unavailable and continue) instead
 // of hanging forever waiting on a response that never comes.
-// ---- Pegasus hub HTTP-to-WS bridge -----------------------------------------
-// The jibo-be jetstream-client sends `/listen/*` and `/proactive/*` over HTTP
-// (that's the API the real jetstream service exposes to skills), but the hub
-// itself only speaks WebSocket at those paths. The real jetstream service
-// translates each HTTP POST into Hubmsg WebSocket messages on its persistent
-// hub connection, then synchronously acks the skill's POST with the booking
-// transaction id (the bridge is jiboV2/jetstream JetHttpHandler.cc /
-// LhubClient.cc). bridgeViaHub does the same thing in-browser, sending the
-// translated Hubmsg(s) on the realSocket already open to the hub and
-// responding to the POST with `{ requestID: <transID> }`. Async hub events
-// then come back over the same WS and realSocket's onmessage aliases
-// transID->requestID for jetstream-client.
+// ---- Hub HTTP-to-WS bridge -------------------------------------------------
+// The jetstream client sends `/listen/*` and `/proactive/*` over HTTP
+// (that's the API the on-device jetstream service exposes to skills),
+// but the cloud hub itself only speaks WebSocket at those paths. The
+// on-device jetstream service translates each HTTP POST into Hubmsg
+// WebSocket messages on its persistent hub connection, then
+// synchronously acks the skill's POST with the booking transaction id.
+// bridgeViaHub does the same thing in-browser, sending the translated
+// Hubmsg(s) on the realSocket already open to the hub and responding
+// to the POST with `{ requestID: <transID> }`. Async hub events then
+// come back over the same WS and realSocket's onmessage aliases
+// transID->requestID for the jetstream client.
 
 function _hubUuid() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -555,25 +559,24 @@ function _hubUuid() {
   });
 }
 
-// Translate a jetstream-client HTTP body into the Hubmsg(s) the hub expects
-// for that path. Returns an array — start_local_turn can be 2 messages
-// (LISTEN + CLIENT_NLU/CLIENT_ASR), most others are single.
+// Translate a jetstream-client HTTP body into the Hubmsg(s) the hub
+// expects for that path. Returns an array — start_local_turn can be
+// 2 messages (LISTEN + CLIENT_NLU/CLIENT_ASR), most others are single.
 function _buildHubMessages(path, body, transID) {
   const ts = Date.now();
   const mid = () => 'mid:' + _hubUuid();
   if (path === '/listen/start_local_turn') {
-    // pegasus packages/hub/src/listen/ListenTransactionHandler.ts:42 sets
-    // TIMEOUT_CONTEXT = 5000ms; if no CONTEXT message arrives within 5s
-    // after LISTEN, the hub fires ERROR { code: TIMEOUT_CONTEXT }. The
-    // C++ jetstream-service and the pegasus hub-client-cli both send a
+    // Hub TIMEOUT_CONTEXT is 5000ms; if no CONTEXT message arrives
+    // within 5s after LISTEN, the hub fires ERROR { code: TIMEOUT_CONTEXT }.
+    // The C++ jetstream-service and the hub-client-cli both send a
     // CONTEXT — collapse that into our LISTEN bundle:
     //   LISTEN  +  CONTEXT(general:null)  +  CLIENT_NLU
     // CONTEXT with `general: null` triggers MessagePreProcessor to
     // auto-fill {accountID: socket.auth.id, robotID: socket.auth.friendlyId}
-    // (we sign a Bearer JWT in server.js using the hub-client-cli default
-    // creds, so socket.auth is populated correctly).
-    // BaseMessage shape is { type, msgID, ts, data }; transID is the SOCKET
-    // header, not a per-message field. ListenMessageMode is only
+    // (we sign a Bearer JWT in server.js using the hub-client-cli
+    // default creds, so socket.auth is populated correctly).
+    // BaseMessage shape is { type, msgID, ts, data }; transID is the
+    // SOCKET header, not a per-message field. ListenMessageMode is only
     // CLIENT_ASR | CLIENT_NLU (audio path = no mode).
     const mode = body.clientNLU != null ? 'CLIENT_NLU' : (body.clientASR ? 'CLIENT_ASR' : undefined);
     const lang = String(body.language || 'en-US').toLowerCase() === 'en-ca' ? 'en-CA' : 'en-US';
@@ -593,12 +596,11 @@ function _buildHubMessages(path, body, transID) {
         maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
       };
     }
-    // CONTEXT.runtime needs to be structurally complete: the user's deployed
-    // pegasus reads `runtime.loop` etc. without null-checks (open-source
-    // ListenTransactionHandler is safe, but the deployed hub crashed with
-    // "Cannot read property 'loop' of null" on null runtime). Use the
-    // same defaults `pegasus/test-utils/mockRuntimeData` produces — empty
-    // loop/users/peoplePresent, neutral character, etc.
+    // CONTEXT.runtime needs to be structurally complete: the deployed
+    // hub reads `runtime.loop` etc. without null-checks and crashed
+    // with "Cannot read property 'loop' of null" on null runtime. Use
+    // sensible defaults — empty loop/users/peoplePresent, neutral
+    // character, etc.
     const _runtime = {
       loop: { loopId: '', jibo: { id: '', birthdate: 0, color: 'WHITE' }, owner: '', users: [] },
       location: { lng: 0, lat: 0, country: '', countryCode: '', stateAbbr: '', state: '', city: '', iso: new Date().toISOString() },
@@ -606,24 +608,23 @@ function _buildHubMessages(path, body, transID) {
       character: { motivation: { playful: 0, social: 0 }, emotion: { confidence: 0, valence: 0, name: 'NEUTRAL' } },
       dialog: { referent: null },
     };
-    // CONTEXT.data.general.release is read by the hub's DecisionMediator on
-    // phoenix-branch pegasus (DecisionMediator.ts:17). If release < '1.9.0',
-    // it overrides certain IR decisions — notably rewriting `report-skill` +
-    // requestNews into `{skillID:'news'}`, which doesn't exist on phoenix
-    // (skills-local.json removed `news_manifest` in commit cb99a976 when news
-    // moved into answer-skill RSS). MessagePreProcessor auto-fills general
-    // {accountID,robotID,lang,remoteAddress} but NOT release, so without us
-    // stamping a value the mediator runs and breaks news. Provide a current
-    // release so the mediator stays out of the way and the IR decision
-    // (report-skill) stands.
+    // CONTEXT.data.general.release is read by the hub's intent-router
+    // decision mediator. If release < '1.9.0', it overrides certain IR
+    // decisions — notably rewriting `report-skill` + requestNews into
+    // `{skillID:'news'}`, which doesn't exist on current builds (the
+    // news manifest moved into answer-skill RSS). MessagePreProcessor
+    // auto-fills general {accountID,robotID,lang,remoteAddress} but
+    // NOT release, so without us stamping a value the mediator runs
+    // and breaks news. Provide a current release so the mediator
+    // stays out of the way and the IR decision (report-skill) stands.
     const generalRelease = (typeof window !== 'undefined' && window.__JIBO_RELEASE__) || '1.9.0';
     const msgs = [
       { type: 'LISTEN', msgID: mid(), ts, data },
       { type: 'CONTEXT', msgID: mid(), ts, data: { general: { release: generalRelease }, runtime: _runtime, skill: null } },
     ];
     if (body.clientNLU != null) {
-      // NLUResult shape per @jibo/interfaces nlu.ts: { rules, intent, entities }.
-      // jetstream-client may send `rules: null` — normalize to [].
+      // NLUResult shape: { rules, intent, entities }. The jetstream
+      // client may send `rules: null` — normalize to [].
       const raw = typeof body.clientNLU === 'string'
         ? (() => { try { return JSON.parse(body.clientNLU); } catch (_) { return { intent: body.clientNLU }; } })()
         : body.clientNLU;
@@ -643,12 +644,13 @@ function _buildHubMessages(path, body, transID) {
     return [{ type: 'CLIENT_NLU', msgID: mid(), transID: 'GLOBAL', ts, data }];
   }
   if (path === '/listen/update_local_turn') {
-    // LocalTurnRequest.update(asrOrNlu) (jetstream-client.js:946-963) posts a body
-    // with EITHER clientASR (string) OR clientNLU (object). Route to the matching
-    // envelope so the hub parses raw text against the existing turn's rules
-    // instead of treating it as a pre-parsed NLU. Sending CLIENT_NLU here breaks
-    // typed-in "yes/sure" replies — the hub returns intent="sure" literally and
-    // the MIM rejects it (rules expect parsed "yes").
+    // LocalTurnRequest.update(asrOrNlu) posts a body with EITHER
+    // clientASR (string) OR clientNLU (object). Route to the matching
+    // envelope so the hub parses raw text against the existing turn's
+    // rules instead of treating it as a pre-parsed NLU. Sending
+    // CLIENT_NLU here breaks typed-in "yes/sure" replies — the hub
+    // returns intent="sure" literally and the MIM rejects it (rules
+    // expect parsed "yes").
     if (body && typeof body.clientASR === 'string') {
       return [{ type: 'CLIENT_ASR', msgID: mid(), transID, ts, data: { text: body.clientASR } }];
     }
@@ -696,16 +698,16 @@ function _synthHttpJson(cb, obj) {
   }, 0);
 }
 
-// Per-turn WS to the Pegasus hub, opened through the dev server's /__cloud-ws
-// proxy so X-JIBO-transID can be set on the upgrade (browsers can't set custom
-// WS headers). Each turn gets its own WebSocket — the hub uses transID on the
-// socket itself ("Currently a new socket connection is used for each request"
-// in ListenHandler.ts). Inbound hub events are translated and forwarded onto
-// jetstream-client's long-lived eventWS fake (registered in __hubSockets), so
-// the skill receives them as if they came through one stream.
-// Translate one inbound hub Hubmsg into jetstream WSmsg event(s), mirroring
-// jiboV2/jetstream ListenLoop.cc's per-hub-message handlers (phw_jm_hub_*).
-// Hub vocabulary (LISTEN, NLU, ASR, SOS_TIMEOUT, ...) maps to robot-side
+// Per-turn WS to the hub, opened through the dev server's /__cloud-ws
+// proxy so X-JIBO-transID can be set on the upgrade (browsers can't
+// set custom WS headers). Each turn gets its own WebSocket — the hub
+// uses transID on the socket itself ("a new socket connection is used
+// for each request"). Inbound hub events are translated and forwarded
+// onto the jetstream client's long-lived eventWS fake (registered in
+// __hubSockets), so the skill receives them as if they came through
+// one stream.
+// Translate one inbound hub Hubmsg into jetstream WSmsg event(s). Hub
+// vocabulary (LISTEN, NLU, ASR, SOS_TIMEOUT, ...) maps to robot-side
 // jetstream events (TURN_RESULT, SOS, EOS, HJ_*, SKILL_*, PROACTIVE).
 function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
   const base = { ts: hubMsg.ts || Date.now(), transID, requestID };
@@ -727,8 +729,9 @@ function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
     case 'PROACTIVE':
     case 'COMMAND':
       return [{ ...base, type: hubMsg.type, data: hubMsg.data }];
-    // Intermediate hub state — the C++ jetstream service consumes these without
-    // emitting an event of its own (the final LISTEN response is what matters).
+    // Intermediate hub state — the on-device jetstream service consumes
+    // these without emitting an event of its own (the final LISTEN
+    // response is what matters).
     case 'ASR':
     case 'NLU':                 return [];
     default:                    return [{ ...base, type: hubMsg.type, data: hubMsg.data }];
@@ -743,7 +746,7 @@ function bridgeViaHub(options, body, cb, reqHandlers, host) {
   try { bodyObj = JSON.parse(body.join('') || '{}'); } catch (_) { /* leave empty */ }
   const isGlobal = options.path === '/listen/mimic_global_turn';
   const transID = isGlobal ? 'GLOBAL' : 'tid:' + _hubUuid();
-  const requestID = transID; // jiboV2/jetstream: request_id is reused as transaction_id
+  const requestID = transID; // request_id is reused as transaction_id
   const msgs = _buildHubMessages(options.path, bodyObj, transID);
 
   const hubPath = options.path.startsWith('/proactive/') ? '/proactive' : '/listen';
@@ -784,13 +787,14 @@ function bridgeViaHub(options, body, cb, reqHandlers, host) {
   _synthHttpJson(cb, { requestID });
 }
 
-// Node-style http.request implemented on top of browser `fetch`, so jibo's
-// service clients (e.g. jetstream-client.sendPostRequest -> Pegasus hub) actually
-// reach the network. Replaces the earlier fail-fast shim, which silently dropped
-// every cloud POST. Also translates JSON responses' `msgID` -> `requestID` so
-// jetstream-client (which checks getRequestID) accepts what the Pegasus hub
-// returns. Note: cross-origin POSTs (the iframe -> pegasus.jibo) require CORS
-// on the server — that's the next likely failure mode if this still doesn't go.
+// Node-style http.request implemented on top of browser `fetch`, so
+// the runtime's service clients (e.g. jetstream-client.sendPostRequest
+// -> cloud hub) actually reach the network. Replaces the earlier
+// fail-fast shim, which silently dropped every cloud POST. Also
+// translates JSON responses' `msgID` -> `requestID` so the jetstream
+// client (which checks getRequestID) accepts what the hub returns.
+// Note: cross-origin POSTs require CORS on the server — that's the
+// next likely failure mode if this still doesn't go.
 function makeHttpClient() {
   function request(options, cb) {
     const reqHandlers = {};
@@ -803,32 +807,33 @@ function makeHttpClient() {
     function go() {
       if (sent) return; sent = true;
       const init = { method, headers: Object.assign({}, options.headers || {}) };
-      // Route requests to the configured backend (e.g. pegasus.jibo) through the
-      // sim server's same-origin /__cloud proxy — the iframe is cross-origin to
-      // pegasus and the jibo cloud doesn't set CORS (it was designed for Electron
-      // which doesn't enforce it). The proxy strips that boundary.
+      // Route requests to the configured backend through the sim
+      // server's same-origin /__cloud proxy — the iframe is cross-origin
+      // to the backend host, and the jibo cloud doesn't set CORS (it
+      // was designed for Electron which doesn't enforce it). The proxy
+      // strips that boundary.
       let url = directUrl;
       const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
-      const isPegasus = server && upstreamHost === server;
-      // The Pegasus hub speaks the WS-only protocol at /listen and /proactive.
-      // jetstream-client sends those as HTTP POSTs (the way the real jetstream
-      // service exposes them to skills). Translate to hub WS messages over the
-      // already-open hub socket (registered by realSocket) and synthesize the
-      // ack the skill expects — { requestID: <transID> }. Mirrors what
-      // jiboV2/jetstream JetHttpHandler does in the real service.
-      if (isPegasus && /^\/(listen|proactive)\//.test(options.path || '')) {
+      const isHub = server && upstreamHost === server;
+      // The cloud hub speaks the WS-only protocol at /listen and
+      // /proactive. The jetstream client sends those as HTTP POSTs
+      // (the way the on-device jetstream service exposes them to
+      // skills). Translate to hub WS messages over the already-open
+      // hub socket (registered by realSocket) and synthesize the ack
+      // the skill expects — { requestID: <transID> }.
+      if (isHub && /^\/(listen|proactive)\//.test(options.path || '')) {
         return bridgeViaHub(options, body, cb, reqHandlers, upstreamHost);
       }
-      if (isPegasus) {
+      if (isHub) {
         url = `/__cloud${options.path || '/'}`;
         init.headers['X-Cloud-Upstream'] = `${upstreamHost}${upstreamPort ? ':' + upstreamPort : ''}`;
       }
       if (method !== 'GET' && method !== 'HEAD' && body.length) init.body = body.join('');
       fetch(url, init).then(async (res) => {
         let text = await res.text();
-        // Hub responses use msgID/transID; jetstream-client expects requestID.
-        // Per jiboV2/jetstream LhubClient.cc the robot's requestID == hub's
-        // transID, so prefer transID; msgID is a per-message fallback.
+        // Hub responses use msgID/transID; the jetstream client
+        // expects requestID. The robot's requestID == hub's transID,
+        // so prefer transID; msgID is a per-message fallback.
         if (text && text.charCodeAt(0) === 123 /* { */) {
           try {
             const obj = JSON.parse(text);
@@ -871,10 +876,11 @@ function makeHttpClient() {
   return { request, get(options, cb) { const r = request(typeof options === 'string' ? { method: 'GET', path: options } : options, cb); r.end(); return r; } };
 }
 
-// In-memory replacement for the `ws` package. Clients connect silently (emit
-// 'open', never 'error'/'close') so jibo-be's HTTPWSClient doesn't reconnect-storm;
-// if a handler for the URL is registered on window.__wsServers, the two sides are
-// wired for bidirectional JSON messaging (so ported channel services work).
+// In-memory replacement for the `ws` package. Clients connect silently
+// (emit 'open', never 'error'/'close') so the runtime's HTTPWSClient
+// doesn't reconnect-storm; if a handler for the URL is registered on
+// window.__wsServers, the two sides are wired for bidirectional JSON
+// messaging (so ported channel services work).
 function makeFakeWs() {
   function Socket() { this._h = {}; this.readyState = 1; }
   Socket.prototype.on = function (e, cb) { (this._h[e] = this._h[e] || []).push(cb); return this; };
@@ -887,16 +893,17 @@ function makeFakeWs() {
   Socket.prototype.close = function () { this.readyState = 3; this.emit('close'); };
   Socket.prototype.terminate = function () { this.readyState = 3; };
 
-  // Registry of live hub WebSockets keyed by host, populated by realSocket on
-  // open. The HTTP-to-WS bridge (see http.request below) dispatches /listen/*
-  // POSTs via the matching open socket rather than HTTP-proxying them, because
-  // the Pegasus hub only speaks WebSocket at those paths.
+  // Registry of live hub WebSockets keyed by host, populated by
+  // realSocket on open. The HTTP-to-WS bridge (see http.request below)
+  // dispatches /listen/* POSTs via the matching open socket rather
+  // than HTTP-proxying them, because the cloud hub only speaks
+  // WebSocket at those paths.
   if (typeof window !== 'undefined' && !window.__hubSockets) window.__hubSockets = {};
   function hostFromUrl(u) { try { return new URL(u).host; } catch (_) { return ''; } }
 
-  // Bridge a real browser WebSocket to the `ws`-package event interface, so the
-  // configured backend server (e.g. a Pegasus jetstream at ws://pegasus.jibo:8090)
-  // is actually reached instead of the in-memory fake.
+  // Bridge a real browser WebSocket to the `ws`-package event
+  // interface, so the configured backend server is actually reached
+  // instead of the in-memory fake.
   function realSocket(url) {
     const sock = new Socket();
     sock.url = url;
@@ -908,14 +915,15 @@ function makeFakeWs() {
       try { const h = hostFromUrl(url); if (h && typeof window !== 'undefined' && window.__hubSockets) window.__hubSockets[h] = real; } catch (_) {}
       sock.emit('open');
     };
-    // The pegasus hub speaks Hubmsg {type, ts, msgID, transID, ...} on its
-    // socket; the robot-side jetstream-client expects WSmsg {type, ts, requestID,
-    // transID, ...} and rejects events lacking requestID. Per jiboV2/jetstream
-    // LhubClient.cc, when the original request_id isn't "GLOBAL", the jetstream
-    // service reuses request_id AS the transaction_id — so the robot's requestID
-    // ↔ the hub's transID. Mirror that: alias transID -> requestID (msgID is just
-    // a per-message id and isn't the correlation key, although we fall back to it
-    // for messages that lack a transID).
+    // The cloud hub speaks Hubmsg {type, ts, msgID, transID, ...} on
+    // its socket; the robot-side jetstream client expects WSmsg
+    // {type, ts, requestID, transID, ...} and rejects events lacking
+    // requestID. When the original request_id isn't "GLOBAL", the
+    // jetstream service reuses request_id AS the transaction_id — so
+    // the robot's requestID ↔ the hub's transID. Mirror that: alias
+    // transID -> requestID (msgID is just a per-message id and isn't
+    // the correlation key, although we fall back to it for messages
+    // that lack a transID).
     real.onmessage = (ev) => {
       let data = ev.data;
       if (typeof data === 'string' && data.charCodeAt(0) === 123 /* { */) {
@@ -944,11 +952,12 @@ function makeFakeWs() {
 
   function WebSocket(url) {
     const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
-    // The pegasus hub uses per-turn WS connections WITH custom upgrade headers
-    // (X-JIBO-transID). Browsers can't set those, so the per-turn opens go through
-    // the dev server's /__cloud-ws proxy (see bridgeViaHub). The long-lived
-    // /events + /vad sockets jetstream-client opens aren't real connections to
-    // anything on the hub (the hub has no such routes) — make them silent fakes
+    // The cloud hub uses per-turn WS connections WITH custom upgrade
+    // headers (X-JIBO-transID). Browsers can't set those, so the
+    // per-turn opens go through the dev server's /__cloud-ws proxy
+    // (see bridgeViaHub). The long-lived /events + /vad sockets the
+    // jetstream client opens aren't real connections to anything on
+    // the hub (the hub has no such routes) — make them silent fakes
     // and register the /events socket so bridgeViaHub can push translated hub
     // events back into jetstream-client through it.
     if (server && String(url).indexOf(server) >= 0 && /\/(events|vad)(\?|$)/.test(String(url))) {
@@ -999,7 +1008,7 @@ function makeBuiltins() {
   EventEmitter.prototype.emit = function (t, ...a) { const l = (this._e && this._e[t]) || []; l.slice().forEach((f) => f(...a)); return l.length > 0; };
   EventEmitter.prototype.listeners = function (t) { return ((this._e && this._e[t]) || []).slice(); };
   EventEmitter.EventEmitter = EventEmitter;
-  // Minimal Node `stream` (jibo-log etc. extend Writable/Transform).
+  // Minimal Node `stream` (log libs etc. extend Writable/Transform).
   class Writable extends EventEmitter {
     write(chunk, enc, cb) { this.emit('data', chunk); if (typeof enc === 'function') enc(); else if (cb) cb(); return true; }
     end(chunk, enc, cb) { if (chunk != null) this.write(chunk); this.emit('finish'); this.emit('end'); if (cb) cb(); }
@@ -1012,9 +1021,10 @@ function makeBuiltins() {
   class PassThrough extends Transform { }
   const stream = { Writable, Readable, Transform, Duplex, PassThrough, Stream: Writable };
 
-  // Buffer: Uint8Array-backed with a node-like toString(encoding,start,end) so
-  // fd reads + `buffer.toString('utf8')` (jibo's AnimDB loader) work, while
-  // `new Buffer(n)` / indexed writes / from / concat keep working for ws/iconv/etc.
+  // Buffer: Uint8Array-backed with a node-like toString(encoding,start,end)
+  // so fd reads + `buffer.toString('utf8')` (the AnimDB loader) work,
+  // while `new Buffer(n)` / indexed writes / from / concat keep
+  // working for ws/iconv/etc.
   const _td = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
   const _te = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
   function _decode(u8, encoding, start, end) {
@@ -1037,9 +1047,9 @@ function makeBuiltins() {
   Buffer.allocUnsafe = (n) => _wrap(new Uint8Array(n));
   Buffer.isBuffer = (x) => x instanceof Uint8Array;
   Buffer.concat = (arr) => { let len = 0; for (const a of arr) len += a.length; const out = new Uint8Array(len); let o = 0; for (const a of arr) { out.set(a, o); o += a.length; } return _wrap(out); };
-  // jibo-client-framework's sendPostRequest uses Buffer.byteLength(body) for
-  // Content-Length. Without it, every HTTP POST to the Pegasus hub (e.g.
-  // /listen/start_local_turn) throws before sending.
+  // The client framework's sendPostRequest uses Buffer.byteLength(body)
+  // for Content-Length. Without it, every HTTP POST to the cloud hub
+  // (e.g. /listen/start_local_turn) throws before sending.
   Buffer.byteLength = (str, enc) => {
     if (str == null) return 0;
     if (typeof str !== 'string') return str.length || str.byteLength || 0;
@@ -1071,9 +1081,10 @@ function makeBuiltins() {
     platform: 'browser',
     argv: ['node', 'skill'],
     nextTick: (f, ...a) => Promise.resolve().then(() => f(...a)),
-    // The skill root, which has a package.json — jibo-plugins FindRoot/getPackagePath
-    // and the `core://` asset-pack resolver start here. Returning '/' makes them
-    // thrash (no package.json up the tree) and mis-resolve core assets.
+    // The skill root, which has a package.json — FindRoot/getPackagePath
+    // and the `core://` asset-pack resolver start here. Returning '/'
+    // makes them thrash (no package.json up the tree) and mis-resolve
+    // core assets.
     cwd: () => (typeof window !== 'undefined' && window.__SKILL_DIR__) || '/',
     on() {}, once() {}, exit() {},
     title: 'browser', pid: 1, arch: 'x64',

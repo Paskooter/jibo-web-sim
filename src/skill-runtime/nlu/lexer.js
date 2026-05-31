@@ -1,8 +1,7 @@
 // .rule DSL lexer.
 //
-// Tokenizes a jibo-nlu `.rule` source file into a flat token stream the
-// parser walks. Covers the dialect actually used by the on-robot @be/*
-// launch rules — see the cloned be/<skill>/launch.rule files for examples.
+// Tokenizes a `.rule` source file into a flat token stream the parser walks.
+// Covers the dialect actually used by the on-robot launch rules.
 //
 // Token kinds:
 //   ID            — bareword identifier (rule names, rule contents)
@@ -49,7 +48,7 @@ export function lex(source) {
   // (for escaped `\@`), or an apostrophe (for words starting with quotes
   // in escape sequences — rare).
   function isWordStart(ch) { return /[A-Za-z0-9_\\]/.test(ch); }
-  // `&` lets `r&b` tokenize as one literal (chitchat radio-station rule).
+  // `&` lets `r&b` tokenize as one literal (e.g. radio-station rules).
   function isWordChar(ch) { return /[A-Za-z0-9_'\\@/.&-]/.test(ch); }
 
   while (i < N) {
@@ -136,9 +135,10 @@ export function lex(source) {
     if (ch === '(') { advance(); push('LPAREN', '('); continue; }
     if (ch === ')') { advance(); push('RPAREN', ')'); continue; }
     // `{% js... %}` — inline JavaScript blocks that run on the parse result
-    // (e.g. `{%delete this.YESNO%}` in factory yes_no.grm). The cloud's parser
-    // executes them via a V8 interpreter; we don't run JS on parse results, so
-    // skip the whole block. Must come before the general `{` punctuation case.
+    // (e.g. `{%delete this.YESNO%}` in a factory grammar). The cloud's parser
+    // executes them via a JS interpreter; we don't run JS on parse results,
+    // so skip the whole block. Must come before the general `{` punctuation
+    // case.
     if (ch === '{' && source[i + 1] === '%') {
       advance(2);
       while (i < N && !(source[i] === '%' && source[i + 1] === '}')) advance();
@@ -176,10 +176,10 @@ export function lex(source) {
     }
 
     // `+=` is the tag-append operator (`{_mimId += Sub._entity}` —
-    // concatenate the value rather than overwrite). Used by the on-robot
-    // chitchat rule to compose mimIds: `{_mimId='RA_JBO_'}{_mimId += ENT._entity}`
-    // → `RA_JBO_TellAJoke`. Without this, the second tag overwrites the first
-    // and chitchat's scripted-response set lookup misses on the bare entity name.
+    // concatenate the value rather than overwrite). Used by on-robot rules
+    // to compose mim ids from a prefix + the matched entity. Without this,
+    // the second tag overwrites the first and downstream scripted-response
+    // set lookups miss on the bare entity name.
     if (ch === '+' && source[i + 1] === '=') { advance(2); push('PLUSEQ', '+='); continue; }
     // Bare `+` is FST concatenation in weighted-form (equivalent to a sequence).
     // Drop standalone occurrences; sequences naturally form by adjacency.
@@ -195,7 +195,7 @@ export function lex(source) {
 
     // Identifier / bareword literal. Words may contain digits (for "4th",
     // "1980"), quoted contractions like `i\'m`, escaped `@` characters
-    // (`\@be/clock`), and slashes (`@be/clock`). We accumulate the run of
+    // (`\@scope/name`), and slashes (`@scope/name`). We accumulate the run of
     // word characters AND inline `\X` escape sequences into a single ID token.
     if (isWordStart(ch)) {
       let w = '';

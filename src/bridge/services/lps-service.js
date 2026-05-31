@@ -1,11 +1,11 @@
 // lps service — Local Perceptual Space (Jibo's model of things around it):
 // look-at targets and transient audio events.
 //
-// The original LPSService tracked perceived entities and exposed queries like
-// getClosestAudibleEntity() plus 'audio-event-start'/'audio-event-end' events
-// (jibo-cli lps-view + audio-event.ts; jibo/dts/lps.d.ts). Here the host (LPS /
-// Audio tabs, or viewport clicks) drives them; we hold the state, notify the
-// skill, and the look-at controller turns Jibo toward the active target.
+// Tracks perceived entities and exposes queries like
+// getClosestAudibleEntity() plus 'audio-event-start'/'audio-event-end' events.
+// The host (LPS / Audio tabs, or viewport clicks) drives them; we hold the
+// state, notify the skill, and the look-at controller turns Jibo toward the
+// active target.
 //
 // Returns { service, setTarget, fireAudioEvent, clearAudioEvent }:
 //   service        — skill-callable methods registered on the bridge.

@@ -9,11 +9,8 @@
 //   - textureCoordinates (flat Float array: u, v, u, v, ...)
 //   - triangles         (flat Int array of vertex indices, groups of 3)
 //
-// Format reference:
-// `sdk-archive/animation-utilities/src/ifr-geometry/loaders/ModelLoader.js`.
-// Legacy renderer sets `defaultMaterial.side = THREE.DoubleSide` (see
-// `sdk-archive/animation-utilities/src/animation-visualize/JiboBody.js:49`),
-// so we mirror that here.
+// The legacy renderer treats this material as double-sided, so we mirror that
+// here.
 
 import * as THREE from 'three';
 

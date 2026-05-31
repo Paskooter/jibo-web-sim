@@ -3,8 +3,7 @@
 // Typing a line simulates speech recognition: the text is logged as a user
 // message and handed to the send handler (wired to AsrService.recognize in
 // main.js), which delivers it to the skill as recognized speech. Jibo's TTS
-// responses are logged back via addJiboMessage(). Mirrors the role of the
-// original simulator's chat-view (jibo-cli/src/simulator/client/views).
+// responses are logged back via addJiboMessage().
 
 export function installChatPanel(panelEl) {
   panelEl.innerHTML = '';

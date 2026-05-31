@@ -1,7 +1,7 @@
 // jibo.bt — the behavior-tree engine, running in the skill iframe (like the
 // original, leaf behaviors call the runtime services — here the jibo.* shim).
 //
-// Faithful to sdk-archive/jibo/src/bt: the Status enum, the Behavior /
+// Faithful to the public jibo.bt API: the Status enum, the Behavior /
 // ParentBehavior / Decorator / BehaviorTree lifecycle (_start/_update/_stop with
 // decorator wrapping + WAIT), the composites (Sequence/Parallel/Switch/Random),
 // the common leaves wired to services, the common decorators, and

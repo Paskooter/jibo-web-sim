@@ -1,10 +1,9 @@
 // session service — what `jibo.init()` talks to.
 //
-// In the original runtime, init() set up the registry context (RegistryPlugin
-// receives 'set-context' with registryHost/token — see
-// sdk-archive/jibo/src/plugins/RegistryPlugin.ts). Here it just hands the
-// skill its run-mode + the logical face resolution so the in-iframe
-// FaceRenderer shim can size its canvas like the real 1280×720 face.
+// On the real runtime, init() sets up the registry context (host/token for
+// service discovery). Here it just hands the skill its run-mode + the logical
+// face resolution so the in-iframe FaceRenderer shim can size its canvas like
+// the real 1280×720 face.
 
 import { FACE_WIDTH, FACE_HEIGHT } from '../face-overlay.js';
 

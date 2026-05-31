@@ -1,8 +1,9 @@
 // jibo.kb — knowledge base. A graph store (Nodes with data + edges) plus the
-// "loop" (the people Jibo knows). API shaped after sdk-archive/jibo dts/kb.d.ts
-// (Model / Node / LoopModel / UserNode, createModel, kb.loop) so skills work;
-// backed by an in-memory store in the iframe (no cloud DB in the sim). Methods
-// take a node-style callback or return a Promise, matching the dts.
+// "loop" (the people Jibo knows). API shaped after the public jibo.kb
+// surface (Model / Node / LoopModel / UserNode, createModel, kb.loop)
+// so skills work; backed by an in-memory store in the iframe (no
+// cloud DB in the sim). Methods take a node-style callback or return
+// a Promise, matching the public signatures.
 
 export function createKb() {
   let seq = 0;

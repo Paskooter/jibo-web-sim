@@ -1,51 +1,51 @@
-// In-browser GlobalManagerService — the SSM-side counterpart of jibo's
+// In-browser GlobalManagerService — counterpart of the runtime's
 // GlobalEvents plugin.
 //
-// jibo-be's runtime expects a service registered under the name "global-manager"
-// (jibo.js ServicesPlugin.serviceInit['global-manager']). On init it opens a
-// WebSocket to that record's host:port path /globals and listens for messages
-// of shape `{status:'OK', message:<eventName>, id:'', result:<ListenResult JSON>,
-// moreinfo:''}` — the same envelope GlobalManagerService.ts:377-386
-// (returnType()) wraps every broadcast in.
+// The runtime expects a service registered under the name "global-manager".
+// On init it opens a WebSocket to that record's host:port path /globals
+// and listens for messages of shape `{status:'OK', message:<eventName>,
+// id:'', result:<ListenResult JSON>, moreinfo:''}`.
 // The four message types it understands map to GlobalEvents handlers:
 //   - 'skill-relaunch'        → onSkillRelaunch  → jibo.globalEvents.skillRelaunch
-//                               → be (index.js)  → Be.redirect(<match.skillID>)
+//                               → redirect to <match.skillID>
 //   - 'skill-launch'          → onSkillLaunch    → jibo.globalEvents.skillLaunch
 //   - 'global'                → onGlobal        → fires GlobalCommand events
 //                               (STOP / SLEEP / VOLUME / WHATCANIDO / HELP / etc.)
 //   - 'non-interrupting-global' → onNonInterrupting (perception-only signals)
 //
-// In a real Jibo, the SSM's listen-service + GlobalListen wraps jetstream-client
-// and re-publishes its turn results into the /globals socket. We do the same in
-// the browser: subscribe to jetstream-client.events.{localTurnResult,
-// globalTurnResult} and broadcast a skill-relaunch (or global) to every
-// connected /globals client whenever a turn yields a skill match.
+// On a real Jibo, the listen-service wraps the jetstream client and
+// re-publishes its turn results into the /globals socket. We do the
+// same in the browser: subscribe to jetstream-client.events.
+// {localTurnResult, globalTurnResult} and broadcast a skill-relaunch
+// (or global) to every connected /globals client whenever a turn
+// yields a skill match.
 //
 // Match-source priority for typed/spoken input:
-//   1. data.result.match.skillID  (cloud's IntentRouter decision)
-//   2. data.result.nlu.entities.skill  (dialogflow entity — the user's pegasus
-//      deploys mostly emit this and leave hub-side match=null because no local
-//      IR config is loaded)
-//   3. domain heuristic ("clock" → "@be/clock") — a tiny lookup of @be/*
-//      skills that the cloud commonly tags via entity domain.
+//   1. data.result.match.skillID  (cloud's intent-router decision)
+//   2. data.result.nlu.entities.skill  (dialogflow entity — most deploys
+//      emit this and leave hub-side match=null because no local
+//      intent-router config is loaded)
+//   3. domain heuristic — a tiny lookup of on-robot skills that the
+//      cloud commonly tags via entity domain.
 
-// Intents the bundle treats as global voice commands. EXACTLY the eight events
-// in jibo.js:19519 `this.voiceEvents = [help, voiceStop, sleep, pause,
-// whatCanIDo, holdOn, volume, overHere]`. Mapped to the uppercase names jibo's
-// onGlobal switch uses (jibo.js:19592+). YES/NO/REPEAT/THANKS/CANCEL are NOT
-// voice events at the SSM level — they're MIM-level intents handled by the
-// active skill's Listen rules. Broadcasting them as 'global' triggers the
-// bundle's onGlobal "No global event found: YES" error and starves the MIM
-// of the response it's waiting for.
+// Intents the bundle treats as global voice commands. EXACTLY the eight
+// voice events (help, voiceStop, sleep, pause, whatCanIDo, holdOn,
+// volume, overHere), mapped to the uppercase names onGlobal expects.
+// YES/NO/REPEAT/THANKS/CANCEL are NOT global voice events — they're
+// MIM-level intents handled by the active skill's Listen rules.
+// Broadcasting them as 'global' triggers the bundle's onGlobal
+// "No global event found: YES" error and starves the MIM of the
+// response it's waiting for.
 const GLOBAL_COMMANDS = new Set([
   'STOP', 'SLEEP', 'PAUSE', 'WHATCANIDO', 'HELP',
   'HOLDON', 'OVERHERE', 'VOLUME',
 ]);
 
-// Map dialogflow `entities.domain` strings to @be/* skill IDs — a last-resort
-// fallback when neither match.skillID nor entities.skill is set. Keep this
-// minimal: every key here is observed in real cloud responses, and a wrong
-// guess would launch the wrong skill, so we only list the unambiguous ones.
+// Map dialogflow `entities.domain` strings to on-robot skill IDs — a
+// last-resort fallback when neither match.skillID nor entities.skill is
+// set. Keep this minimal: every key here is observed in real cloud
+// responses, and a wrong guess would launch the wrong skill, so we
+// only list the unambiguous ones.
 const DOMAIN_TO_SKILL = {
   clock: '@be/clock',
   greetings: '@be/greetings',
@@ -73,15 +73,14 @@ function resolveSkillID(result) {
   return null;
 }
 
-// Map a NLU intent to the canonical GlobalCommand name jibo.onGlobal expects
-// (uppercase, with a few intent aliases). Returns null if the intent isn't a
-// global voice command.
+// Map a NLU intent to the canonical GlobalCommand name onGlobal expects
+// (uppercase, with a few intent aliases). Returns null if the intent
+// isn't a global voice command.
 function resolveGlobalCommand(intent) {
   if (!intent || typeof intent !== 'string') return null;
   const up = intent.toUpperCase();
   if (GLOBAL_COMMANDS.has(up)) return up;
-  // Anything starting "volume*" routes through the VOLUME event (see jibo.js
-  // onGlobal: `if (action.match(/^volume/)) action = 'volume'`).
+  // Anything starting "volume*" routes through the VOLUME event.
   if (/^volume/i.test(intent)) return 'VOLUME';
   return null;
 }
@@ -97,8 +96,8 @@ export class GlobalManagerService {
   }
 
   // ServiceBus integration: gets called once on register. We use it to learn
-  // our port, register a __wsServers entry for /globals, and start polling for
-  // jetstream-client to come up (jet-stream init() runs after the bus install).
+  // our port, register a __wsServers entry for /globals, and start polling
+  // for the jetstream client to come up (its init runs after the bus install).
   attachBus({ bus, name, port }) {
     this.bus = bus;
     this.name = name;
@@ -107,25 +106,26 @@ export class GlobalManagerService {
     this._waitForJetstream();
   }
 
-  // RPC channel (RemoteClient) — global-manager has no method-RPC surface, but
-  // jibo-client-framework still requires a `handle` for the bus to wire it.
+  // RPC channel (RemoteClient) — global-manager has no method-RPC surface,
+  // but the bus still requires a `handle` to wire it.
   handle() { return undefined; }
 
-  // HTTP surface (jibo.js GlobalEvents.announceGlobalHandler posts JSON to
-  // `${host}:${port}/global` whenever a GlobalCommand listener is added or
-  // removed). The real SSM uses this to tell the cloud which intents the
-  // robot is currently willing to handle; we don't need that information —
+  // HTTP surface — GlobalEvents.announceGlobalHandler posts JSON to
+  // `${host}:${port}/global` whenever a GlobalCommand listener is added
+  // or removed. On-device this tells the cloud which intents the robot
+  // is currently willing to handle; we don't need that information —
   // our jetstream-events binding sees every turn anyway — but the runtime
   // expects a 2xx so the XHR doesn't error. Reply 200, no body.
   handleHttp() {
     return { status: 200, body: '' };
   }
 
-  // Register a /globals WS endpoint on our port. cjs-require's fake WebSocket
-  // tries `__wsServers.find(s => s.match(url))` for non-cloud paths; the
-  // matching server's onConnection gets the peer Socket. jibo.js's GlobalEvents
-  // builds its URL as `"ws:" + host + ":" + port + "/globals"` (note: no `//`),
-  // so the regex tolerates both `ws:host:port/path` and `ws://host:port/path`.
+  // Register a /globals WS endpoint on our port. The fake WebSocket in
+  // cjs-require tries `__wsServers.find(s => s.match(url))` for non-cloud
+  // paths; the matching server's onConnection gets the peer Socket.
+  // GlobalEvents builds its URL as `"ws:" + host + ":" + port + "/globals"`
+  // (note: no `//`), so the regex tolerates both `ws:host:port/path`
+  // and `ws://host:port/path`.
   _installWsServer() {
     if (typeof window === 'undefined') return;
     if (!window.__wsServers) window.__wsServers = [];
@@ -134,7 +134,7 @@ export class GlobalManagerService {
     this._serverEntry = {
       match(url) {
         // Accept both "ws://host:port/globals" and the "ws:host:port/globals"
-        // shape jibo.js GlobalEvents.init builds (it omits the `//`).
+        // shape GlobalEvents.init builds (it omits the `//`).
         const stripped = String(url).replace(/^wss?:\/?\/?/, '');
         const slash = stripped.indexOf('/');
         const authority = slash === -1 ? stripped : stripped.slice(0, slash);
@@ -154,10 +154,10 @@ export class GlobalManagerService {
     window.__wsServers.push(this._serverEntry);
   }
 
-  // Bind to jetstream-client's events once the runtime has it. The cloud
-  // bridge in cjs-require lives in the same iframe, so events flow through
-  // the same module instance — once `jibo.jetstream.events` exists we can
-  // subscribe directly.
+  // Bind to the jetstream client's events once the runtime has it. The
+  // cloud bridge in cjs-require lives in the same iframe, so events
+  // flow through the same module instance — once `jibo.jetstream.events`
+  // exists we can subscribe directly.
   _waitForJetstream() {
     if (typeof window === 'undefined') return;
     const tryBind = () => {
@@ -176,23 +176,22 @@ export class GlobalManagerService {
 
   _onTurnResult(data, isGlobal) {
     console.log('[global-manager] turn result:', isGlobal ? 'GLOBAL' : 'LOCAL', 'status=', data && data.status, 'intent=', (data && data.result && data.result.nlu && data.result.nlu.intent), 'match=', (data && data.result && data.result.match));
-    // Status mirrors jetstream-client TurnResultType — SUCCEEDED is the only
-    // status that carries a usable ListenResult. FAILED/TIMEDOUT/etc. surface
-    // through SharedGlobalEvents.noGlobalMatch on the be side.
+    // Status mirrors the jetstream-client TurnResultType — SUCCEEDED is
+    // the only status that carries a usable ListenResult. FAILED/TIMEDOUT/
+    // etc. surface through SharedGlobalEvents.noGlobalMatch downstream.
     if (!data || data.status !== 'SUCCEEDED') return;
     const result = data.result;
     if (!result) return;
 
-    // Order matters here. The hub commonly returns BOTH a global-command intent
-    // (e.g. whatCanIDo / help) AND a concrete skill match (e.g.
-    // match.skillID='@be/friendly-tips', onRobot=true) — the hub has already
-    // chosen the skill to handle the global. If we broadcast as global first,
-    // the bundle's onGlobal fires but never launches a skill, so the orphan
-    // cloud SKILL_ACTION sits in CloudResponseRegistry and gets culled at 10s.
-    // Real source's GlobalManagerService.handleSkillLaunch routes any turn
-    // with a usable match.skillID as a skill (re)launch
-    // (GlobalManagerService.ts:143). Skill match takes priority; the global
-    // path is the FALLBACK for matchless turns (volume up, etc.).
+    // Order matters here. The hub commonly returns BOTH a global-command
+    // intent (e.g. whatCanIDo / help) AND a concrete skill match (with
+    // onRobot=true) — the hub has already chosen the skill to handle
+    // the global. If we broadcast as
+    // global first, the bundle's onGlobal fires but never launches a
+    // skill, so the orphan cloud SKILL_ACTION sits in the CloudResponseRegistry
+    // and gets culled at 10s. Any turn with a usable match.skillID
+    // routes as a skill (re)launch. Skill match takes priority; the
+    // global path is the FALLBACK for matchless turns (volume up, etc.).
     const intent = (result.nlu && result.nlu.intent) || '';
     const skillID = resolveSkillID(result);
     if (!skillID) {
@@ -203,30 +202,29 @@ export class GlobalManagerService {
         return;
       }
       console.log('[global-manager] no skill match (intent=', intent, ') — dropping');
-      // No skill match and not a global command — be's noGlobalMatch path
-      // handles it locally. Nothing to push.
+      // No skill match and not a global command — the runtime's
+      // noGlobalMatch path handles it locally. Nothing to push.
       return;
     }
 
-    // Cloud-container skills (chitchat-skill / personal-report-skill / news /
-    // answer) have match.onRobot=false and a name not in @be/be's skills
-    // map (which is keyed by @be/* package names). The local handler is
-    // @be/nimbus — it reads match.cloudSkill and awaits
-    // listenResult.cloudSkillResponse (a Promise<SKILL_ACTION-data>) which
-    // jetstream-client already stamped onto `result.cloudSkillResponse` in
-    // emitLocalTurnResult (see jetstream-client.js line ~480).
+    // Cloud-container skills (chitchat / personal-report / news /
+    // answer) have match.onRobot=false and a name not in the on-robot
+    // skills map. The local handler is the nimbus skill — it reads
+    // match.cloudSkill and awaits
+    // listenResult.cloudSkillResponse (a Promise<SKILL_ACTION-data>),
+    // which the jetstream client already stamped onto
+    // `result.cloudSkillResponse` in emitLocalTurnResult.
     //
-    // CRITICAL: we cannot round-trip through the /globals JSON broadcast for
-    // cloud matches. JSON.stringify strips the Promise, and
-    // GlobalEvents.onSkillRelaunch (jibo.js:19634) then calls
-    // `jetstream.getCloudSkillResponse(transID)` to re-add the entry — but
-    // the registry's add() DELETES any existing entry and returns its
-    // promise, so the SKILL_ACTION arriving later finds no entry and
-    // resolves a different one entirely. Nimbus's await sits on the now-
-    // orphan promise until the 8s "Cloud Skill Response Timeout" fires.
-    // Skirt this by emitting skillRelaunch directly with the in-memory
-    // result (cloudSkillResponse Promise intact) — same as what the real
-    // SSM listen-service does when the cloud-match handler runs in-process.
+    // CRITICAL: we cannot round-trip through the /globals JSON broadcast
+    // for cloud matches. JSON.stringify strips the Promise, and
+    // GlobalEvents.onSkillRelaunch then calls
+    // `jetstream.getCloudSkillResponse(transID)` to re-add the entry —
+    // but the registry's add() DELETES any existing entry and returns
+    // its promise, so the SKILL_ACTION arriving later finds no entry
+    // and resolves a different one entirely. Nimbus's await sits on
+    // the now-orphan promise until the 8s "Cloud Skill Response
+    // Timeout" fires. Skirt this by emitting skillRelaunch directly
+    // with the in-memory result (cloudSkillResponse Promise intact).
     const rawMatchID = (result.match && result.match.skillID) || skillID;
     const isLocalBeSkill = typeof rawMatchID === 'string' && rawMatchID.startsWith('@be/');
     const isCloudSkill = (result.match && result.match.onRobot === false) || !isLocalBeSkill;
@@ -236,8 +234,8 @@ export class GlobalManagerService {
       directResult.match = directResult.match || {};
       directResult.match.cloudSkill = rawMatchID;
       directResult.match.skillID = '@be/nimbus';
-      // onRobot stays false — Be.index.js redirect doesn't read it, but
-      // anything downstream that does will see the truthful "cloud" mark.
+      // onRobot stays false — redirect doesn't read it, but anything
+      // downstream that does will see the truthful "cloud" mark.
       if (directResult.nlu && !directResult.nlu.skill) directResult.nlu.skill = '@be/nimbus';
       console.log('[global-manager] -> skillRelaunch.emit @be/nimbus (cloud=' + rawMatchID + ') direct');
       try {
@@ -256,8 +254,8 @@ export class GlobalManagerService {
       return;
     }
 
-    // On-robot @be/* skill: the /globals broadcast path is safe — there's
-    // no Promise to preserve, onSkillRelaunch's getCloudSkillResponse only
+    // On-robot skill: the /globals broadcast path is safe — there's no
+    // Promise to preserve, onSkillRelaunch's getCloudSkillResponse only
     // fires when !match.onRobot, and the redirect can find this.skills[id].
     const enriched = this._serializeResult(result);
     enriched.match = enriched.match || {};
@@ -265,11 +263,10 @@ export class GlobalManagerService {
     if (enriched.match.onRobot === undefined) enriched.match.onRobot = true;
     if (enriched.nlu && !enriched.nlu.skill) enriched.nlu.skill = rawMatchID;
     console.log('[global-manager] -> skill-relaunch', rawMatchID, '(clients=' + this.clients.size + ')');
-    // Source envelope (GlobalManagerService.ts:377-386) is
-    // {status, message:<tag>, id, result, moreinfo}. jibo.GlobalEvents.onMessage
-    // (jibo.js:19580) only reads .status + .message + .result, but match the
-    // full shape so anything that re-broadcasts/proxies our payload sees an
-    // identical envelope to what the real SSM emits.
+    // Envelope is {status, message:<tag>, id, result, moreinfo}.
+    // GlobalEvents.onMessage only reads .status + .message + .result,
+    // but match the full shape so anything that re-broadcasts/proxies
+    // our payload sees an identical envelope.
     this._broadcast({ status: 'OK', message: 'skill-relaunch', id: '', result: enriched, moreinfo: '' });
   }
 
@@ -285,8 +282,8 @@ export class GlobalManagerService {
       // pass through optional fields the cloud may stamp
       transID: result.transID,
       state: result.state,
-      // NLParse + Input mirror the jibo-nlu output shape that on-robot
-      // skills read directly (e.g. @be/chitchat InitState.addEmotionInfo
+      // NLParse + Input mirror the NLU output shape that on-robot
+      // skills read directly (e.g. chitchat's InitState.addEmotionInfo
       // hits `data.asrResult.NLParse.valenceImpact`). They survive the
       // JSON round-trip only if both this serializer AND the bundle-side
       // ListenResult.fromJSON preserve them; boot.js monkey-patches the

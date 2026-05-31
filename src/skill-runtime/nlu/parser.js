@@ -42,14 +42,13 @@ export function parse(source) {
   return out;
 
   // ---- expression grammar ----
-  // jibo-nlu's `.rule` DSL binds `|` TIGHTER than sequence — opposite of
-  // standard regex/BNF. So `do i|we|you have` parses as `do (i|we|you) have`,
-  // not `(do i)|(we)|(you have)`. Patterns throughout the on-robot launch
-  // rules rely on this: e.g. `(what time is|will $w03 show ?be $w03 on)` is
-  // `what time (is|will) $w03 show ?be $w03 on`, and `(?$V_CANYOU get|give|access)`
-  // is `?$V_CANYOU (get|give|access)`. Reading these with alt < seq drops
-  // most of the meaningful match (chitchat then dominates everything because
-  // its loose-alt branches survive while clock's tight-alt structure breaks).
+  // The `.rule` DSL binds `|` tighter than sequence — opposite of standard
+  // regex/BNF. So `do i|we|you have` parses as `do (i|we|you) have`, not
+  // `(do i)|(we)|(you have)`. Patterns throughout the on-robot launch rules
+  // rely on this: e.g. `(what time is|will $w03 show ?be $w03 on)` is
+  // `what time (is|will) $w03 show ?be $w03 on`, and
+  // `(?$V_CANYOU get|give|access)` is `?$V_CANYOU (get|give|access)`.
+  // Reading these with alt < seq drops most of the meaningful match.
   //
   // Expression  = SeqExpr
   // SeqExpr     = AltItem+
@@ -83,7 +82,7 @@ export function parse(source) {
     if (items.length === 0) throw new Error(`parser: empty sequence at ${peek().line}:${peek().col}`);
     if (items.length === 1) return items[0];
     // `(X Y {tag=X._field})` — the trailing tag block on the LAST item is
-    // semantically a GROUP tag in the cloud's FST: it fires at the end of the
+    // semantically a group tag in the cloud's FST: it fires at the end of the
     // sequence with visibility into every prior item's subFields. We model this
     // by hoisting the last item's trailing tags up to the seq node, where the
     // matcher applies them against accumulated subFields after the full match.
@@ -139,7 +138,7 @@ export function parse(source) {
   // some dialects; the on-robot rules consistently use one pair per block).
   // `op` distinguishes `=` (set) from `+=` (append). Append concatenates the
   // value onto whatever the key already holds in the same scope (private
-  // subFields or public entities), matching jibo-nlu's tag semantics.
+  // subFields or public entities), matching standard tag semantics.
   function parseTagBlock() {
     eat('LBRACE');
     const tags = [];

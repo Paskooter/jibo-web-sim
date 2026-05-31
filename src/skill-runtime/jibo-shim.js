@@ -2,7 +2,7 @@
 // subset of the public Jibo API, proxying calls to host-side services over
 // postMessage (see src/bridge/host-bridge.js for the protocol + the host end).
 //
-// API shape mirrors sdk-archive/jibo (the runtime skills consume):
+// API shape mirrors the public jibo runtime that skills consume:
 //   jibo.init(display?, cb)         — set up the face, then call back
 //   jibo.tts.speak(text, opts?, cb?) / stop(cb?) / on(event, fn)
 //   jibo.nlu.parseFromRule / parseFromURI / compile  (callback or promise)

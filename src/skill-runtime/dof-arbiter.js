@@ -1,11 +1,6 @@
-// DOFArbiter — faithful in-browser port of the
-// `jibo-dof-arbiter` package that the real expression service runs
-// inside the SSM (skills-service-manager). Source:
-//   /tmp/sdk/packages/jibo-dof-arbiter/src/main/{DOFArbiter,
-//     DOFArbiterPriorityPolicy, DOFEventDispatcher, OwnerInfo,
-//     DOFOptions, DOFOwnershipListener, index}.ts
+// DOFArbiter — in-browser DOF arbitration used by the expression service.
 //
-// In jibo v12 the runtime-level `jibo.dofArbiter` was REMOVED (the
+// In jibo v12 the runtime-level `jibo.dofArbiter` was removed (the
 // bundle throws on access: "jibo.dofArbiter has been removed, please
 // use jibo.expression"). Arbitration now lives inside the expression
 // service, behind expression.createAndPlayAnimation/playAnimation,
@@ -14,11 +9,8 @@
 // the expression service offline, we drive the same arbitration
 // locally in the iframe and wire it into our createAndPlayAnimation
 // stub (installExpressionStubs).
-//
-// Priority config below mirrors ExpressionService.initDOFArbiter
-// (ExpressionService.ts:135-149) verbatim.
 
-// OwnershipStatusFlag — matches OwnerInfo.ts:14-23.
+// OwnershipStatusFlag — DOF lifecycle states.
 export const OwnershipStatusFlag = Object.freeze({
   AVAILABLE: 0,
   ACTIVE_AUTO: 1,
@@ -27,7 +19,6 @@ export const OwnershipStatusFlag = Object.freeze({
 });
 
 // One per DOF; tracks the current/most-recent owner, instance, status.
-// Mirrors OwnerInfo.ts OwnershipInformation.
 export class OwnershipInformation {
   constructor(dof) {
     this.dof = dof;
@@ -35,15 +26,15 @@ export class OwnershipInformation {
     this.mostRecentOwner = null;
     this.ownerInstance = null;
     this.ownershipStatus = OwnershipStatusFlag.AVAILABLE;
-    this.releasedAt = null;     // ms timestamp (we use performance.now() instead of jibo's Clock.currentTime)
+    this.releasedAt = null;     // ms timestamp (performance.now())
   }
 }
 
-// Default priority config from ExpressionService.ts:135-149. Higher
-// number wins. 'Direct' (priorityForDirectUsers) is the bucket for
-// animation requests that go directly through animation-utilities
-// without being mediated by playAnimation — those can't be denied,
-// only their priority affects whether others can interrupt them.
+// Default priority config — higher number wins. 'Direct'
+// (priorityForDirectUsers) is the bucket for animation requests that
+// go directly through animation-utilities without being mediated by
+// playAnimation — those can't be denied, only their priority affects
+// whether others can interrupt them.
 export const DEFAULT_PRIORITY_CONFIG = Object.freeze({
   priorityForUnknownLabels: 5,
   priorityForDirectUsers: 10,
@@ -60,7 +51,7 @@ export const DEFAULT_PRIORITY_CONFIG = Object.freeze({
   ],
 });
 
-// DOFArbiterPriorityPolicy — port of DOFArbiterPriorityPolicy.ts.
+// DOFArbiterPriorityPolicy — priority-based acquisition policy.
 // acquire(requester, dofs, dofOwners, options): which subset of the
 // requested DOFs this requester is allowed to take. Denials happen
 // when the current owner has >= priority. With options.allOrNothing
@@ -101,7 +92,7 @@ export class DOFArbiterPriorityPolicy {
 
 // Queue events emitted from within arbiter stack-frames, dispatch
 // them all at the end so listener callbacks see a stable arbiter
-// state. Singleton mirrors DOFEventDispatcher.ts:23-78.
+// state. Singleton.
 export class DOFEventDispatcher {
   constructor() { this._queue = []; }
   static getInstance() {
@@ -129,8 +120,7 @@ export class DOFEventDispatcher {
 // When the caller signals the instance stopped/cancelled it transitions
 // owned DOFs to TIMED_RELEASE. update() (called every 100ms) walks
 // the table and demotes TIMED_RELEASE → AVAILABLE after the grace
-// period (graceExpiryPeriodS, default -0.001 = release immediately,
-// matching DOFArbiter.ts:119).
+// period (graceExpiryPeriodS, default -0.001 = release immediately).
 export class DOFArbiter {
   constructor() {
     this._policy = null;
@@ -158,8 +148,7 @@ export class DOFArbiter {
           ? robotInfoOrNames.getDOFNames()
           : []);
     for (const name of names) this._dofOwners.set(name, new OwnershipInformation(name));
-    // 100ms tick — DOFArbiter.ts:173 setInterval(update, 100). Skipped
-    // when no DOFs are registered (nothing to track).
+    // 100ms tick — skipped when no DOFs are registered (nothing to track).
     if (names.length > 0 && typeof setInterval !== 'undefined') {
       this._updateTimer = setInterval(this.update.bind(this), 100);
     }
@@ -182,9 +171,8 @@ export class DOFArbiter {
       }
     }
     if (freed.length) {
-      // Notify high-priority owners last so they react to the freed
-      // DOFs after lower-priority listeners have had a chance to
-      // (matches DOFArbiter.ts:209 — reverse iteration).
+      // Notify high-priority owners last (reverse iteration) so they
+      // react after lower-priority listeners have had a chance to.
       for (let i = this._ownershipListenersInOrder.length - 1; i >= 0; i--) {
         const owner = this._ownershipListenersInOrder[i];
         const ls = this._ownershipListeners.get(owner);
@@ -208,7 +196,7 @@ export class DOFArbiter {
   // Try to play the builder under `requester`'s ownership. Returns
   // an instance (whatever builder.play() returns) if any DOFs were
   // acquired, else null. The builder MUST expose getDOFs() and
-  // optionally setDOFs() + play(). Mirrors DOFArbiter.ts:232-273.
+  // optionally setDOFs() + play().
   playAnimation(builder, requester, options) {
     if (!this._policy) return builder && builder.play ? builder.play() : null;
     if (builder && builder.layer && builder.layer !== this._mainAnimationLayer) {
@@ -237,7 +225,7 @@ export class DOFArbiter {
     return allowed.length > 0 ? instance : null;
   }
   // Standalone claim — used when an animation is created and the
-  // caller manages the instance lifecycle separately (DOFArbiter.ts:465).
+  // caller manages the instance lifecycle separately.
   attemptToClaimForInstance(requester, instance, desiredDOFs, options) {
     if (!this._policy) return desiredDOFs;
     const opts = options || this._defaultOptions;
@@ -248,19 +236,19 @@ export class DOFArbiter {
     this._eventDispatcher.dispatchQueuedEvents();
     return allowed;
   }
-  // Probe-only — same policy check, no state change. DOFArbiter.ts:485.
+  // Probe-only — same policy check, no state change.
   getAvailable(requester, desiredDOFs, options) {
     if (!this._policy) return desiredDOFs;
     const opts = options || this._defaultOptions;
     return this._policy.acquire(requester, desiredDOFs, this._dofOwners, opts);
   }
-  // List DOFs currently owned by requester. DOFArbiter.ts:499.
+  // List DOFs currently owned by requester.
   getDofsInUse(requester) {
     const out = [];
     for (const info of this._dofOwners.values()) if (info.owner === requester) out.push(info.dof);
     return out;
   }
-  // Listener registration — DOFArbiter.ts:520. listener must implement
+  // Listener registration — listener must implement
   // dofsLost(owner, dofs[]), dofsGained(owner, dofs[]), dofsAvailable(dofs[]).
   addListener(forOwner, listener) {
     let arr = this._ownershipListeners.get(forOwner);
@@ -284,7 +272,6 @@ export class DOFArbiter {
       : Array.from(this._ownershipListeners.keys());
   }
   // Subset of provided DOFs whose mostRecentOwner is in onlyForOwners.
-  // DOFArbiter.ts:565.
   getDOFsMostRecentlyOwnedBy(desiredDOFs, onlyForOwners) {
     const filtered = [];
     const want = new Set(onlyForOwners);
@@ -297,7 +284,6 @@ export class DOFArbiter {
   // Caller signals an instance ended naturally (STOPPED) or was
   // preempted/cancelled. Transitions owned DOFs to TIMED_RELEASE so
   // the next update() tick demotes them to AVAILABLE.
-  // Mirrors DOFArbiter.ts:785-815 STOPPED/CANCELLED branch.
   releaseInstance(instance) {
     const dofs = this._instanceToDOF.get(instance);
     if (!dofs) return;
@@ -314,13 +300,13 @@ export class DOFArbiter {
     this._instanceToDOF.delete(instance);
     if (didAny) this.update();   // immediate release if grace ≤ 0
   }
-  // Centering — DOFArbiter.ts:332-399. Restore DOFs to their default
-  // (rest) pose. We don't have an animate engine to build a real
-  // pose-anim builder, so the caller (installExpressionStubs) hands
-  // us a simple {getDOFs, play} object. Faithful semantics: try to
-  // acquire the requested DOF set, if anything is allowed run the
-  // builder under that requester. completionCallback fires when the
-  // builder reports STOPPED/CANCELLED, or immediately if 0 acquired.
+  // Centering — restore DOFs to their default (rest) pose. We don't
+  // have an animate engine to build a real pose-anim builder, so the
+  // caller (installExpressionStubs) hands us a simple {getDOFs, play}
+  // object. Try to acquire the requested DOF set; if anything is
+  // allowed, run the builder under that requester. completionCallback
+  // fires when the builder reports STOPPED/CANCELLED, or immediately
+  // if 0 acquired.
   centerRobot(requester, whichDOFs, centerGlobally, completionCallback) {
     if (!this._policy) { if (completionCallback) completionCallback(); return; }
     const desired = (whichDOFs && typeof whichDOFs.getDOFs === 'function') ? whichDOFs.getDOFs() : Array.from(this._dofOwners.keys());
@@ -340,9 +326,9 @@ export class DOFArbiter {
     this.update();
     if (completionCallback) completionCallback();
   }
-  // DOFArbiter.ts:421-448. Filter DOFs to those most-recently owned
-  // by `onlyForOwners`, acquire under `requester`'s priority, then
-  // hand off to `trustee` for the ongoing centering.
+  // Filter DOFs to those most-recently owned by `onlyForOwners`,
+  // acquire under `requester`'s priority, then hand off to `trustee`
+  // for the ongoing centering.
   centerWithHybridPriority(requester, trustee, desiredDOFSet, onlyForOwners, centerGlobally, completionCallback) {
     if (!this._policy) { if (completionCallback) completionCallback(); return; }
     const allDofs = Array.from(this._dofOwners.keys());
@@ -354,8 +340,8 @@ export class DOFArbiter {
     this._eventDispatcher.queueEvent(this._notifyGain, this, [changes.dofGains.owner, changes.dofGains.dofs]);
     this.centerRobot(trustee, { getDOFs: () => useDOFs }, !!centerGlobally, completionCallback);
   }
-  // _markInUseByInstance — DOFArbiter.ts:651. Move DOFs to ACTIVE_AUTO
-  // ownership. Returns the diff (losses by old-owner, gains by new-owner).
+  // Move DOFs to ACTIVE_AUTO ownership. Returns the diff
+  // (losses by old-owner, gains by new-owner).
   _markInUseByInstance(requester, instance, dofsToUse) {
     const dofLosses = {};
     const dofsGained = [];
@@ -378,8 +364,7 @@ export class DOFArbiter {
     }
     return { dofLosses, dofGains: { owner: requester, dofs: dofsGained } };
   }
-  // _markAsUsedByTransient — DOFArbiter.ts:685. Used for instant
-  // (instance-less) DOF usage; immediately goes to TIMED_RELEASE.
+  // Used for instant (instance-less) DOF usage; immediately goes to TIMED_RELEASE.
   _markAsUsedByTransient(requester, dofsToUse) {
     const dofLosses = {};
     const dofsGained = [];

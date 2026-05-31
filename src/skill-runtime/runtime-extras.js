@@ -1,8 +1,8 @@
 // Smaller client-side jibo namespaces implemented in the skill iframe:
-// timer, utils, loader, lifecycle, versions. Shaped after sdk-archive/jibo
-// (utils.d.ts, loader.d.ts, lifecycle, versions.d.ts) so real skills that use
-// jibo.timer.on('update'), jibo.utils.DelayedCall, jibo.loader.load,
-// jibo.lifecycle.finished(), etc. keep working.
+// timer, utils, loader, lifecycle, versions. Shaped after the public
+// jibo runtime so real skills that use jibo.timer.on('update'),
+// jibo.utils.DelayedCall, jibo.loader.load, jibo.lifecycle.finished(),
+// etc. keep working.
 
 // jibo.timer — emits 'update' every animation frame (the runtime heartbeat).
 export function createTimer() {
@@ -39,8 +39,8 @@ export function createUtils() {
     _root: '/',
     setRoot(r) { this._root = String(r).replace(/\/$/, '') || '/'; },
     findRoot() { return this._root; },
-    // Resolve a module id (e.g. '@be/clock') to its entry path, or a relative
-    // path against the skill root — used by bundles to derive asset roots.
+    // Resolve a module id to its entry path, or a relative path against
+    // the skill root — used by bundles to derive asset roots.
     resolve(p) {
       if (p && (p[0] === '.' || p[0] === '/')) return join(this._root, p);
       return join(this._root, 'node_modules', p, 'index.js');

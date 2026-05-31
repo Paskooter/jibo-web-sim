@@ -1,8 +1,7 @@
 // 3D viewport bootstrap.
 //
-// M0 goal: prove the import-map + Three.js plumbing by rendering a placeholder
-// stand-in for Jibo's body (three cylinder segments stacked on a base) with
-// OrbitControls. The real articulated Jibo geometry lands in M1.
+// Sets up the Three.js scene, lights, and OrbitControls and mounts the
+// articulated Jibo rig built by jibo.js.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
