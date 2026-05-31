@@ -336,6 +336,14 @@ function _drainLingeringAudio() {
 function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
   const data = options && options.data;
   const channels = (data && data.content && Array.isArray(data.content.channels)) ? data.content.channels : null;
+  // Honor the AnimConfig mute flags. Callers like @be/idle.playMusing set
+  // mutes = { AUDIO:false, SCREEN:true, BODY:true } to make the playback
+  // eye-only — that's how idle musings layer on top of a body lookat
+  // without fighting it. Without enforcement, the musing's body channels
+  // overwrite the attention manager's section_r rotations every frame and
+  // the body sits still while only the eye moves.
+  const mutes = (options && options.mutes) || {};
+  const muteBody = mutes.BODY === true;
   // Sorted event queue; each entry tracks if it's been fired.
   const timedEvents = (data && data.content && Array.isArray(data.content.events))
     ? data.content.events.slice().sort((a, b) => (a.time || 0) - (b.time || 0))
@@ -449,6 +457,7 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
       } else {
         state.offset = 0; state.offsetVel = 0;
       }
+      if (muteBody) continue;   // mutes.BODY:true → skip body channel posts entirely
       if (name in sampled) {
         state.lastApplied = sampled[name] + state.offset;
         bodyDofs[name] = state.lastApplied;
@@ -1561,9 +1570,13 @@ export function installIdleMotion(jibo) {
         useBig = !useBig;
       }
     } catch (_) { /* */ }
-    setTimeout(fireMusing, 10000 + Math.random() * 8000);    // 10-18s
+    // 60-120s — closer to the on-device cadence where the source's
+    // AlertState/RelaxedState fires playBigMusing once per state entry at
+    // minute scale. Fast enough to be visible in a demo, slow enough not
+    // to drown out the boredom-look's body rotation.
+    setTimeout(fireMusing, 60000 + Math.random() * 60000);
   }
-  setTimeout(fireMusing, 12000 + Math.random() * 4000);
+  setTimeout(fireMusing, 20000 + Math.random() * 15000);
 
   console.log('[live-eye] idle motion installed (blinks + boredom look + musings)');
 }
