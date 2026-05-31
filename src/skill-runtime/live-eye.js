@@ -1471,24 +1471,30 @@ export function patchBeFramework(requireFn) {
 // reach onTouch -> MainMenu.
 // Install an ambient idle motion driver — the always-on background
 // motion that keeps Jibo feeling alive between explicit skill behaviors.
-// Two layers, both using the same APIs the on-device runtime hits:
-//   blinks  — jibo.expression.blink() at random intervals (3-13s, the
-//             same cadence as the on-device "Idle Blink Occasionally"
-//             attention rule). expression.blink() is what the source's
-//             blinker delegate calls.
-//   musings — short canned animations the @be/idle skill ships, queried
-//             by category 'ib' with 'ib-idle-short-time' or 'ib-idle-
-//             long-time' meta. We hit the same playSmallMusing /
-//             playBigMusing methods on the idle skill's circadian
-//             expressor — same query filtering, animation pool, and
-//             playback path the source uses, just on a faster cadence
-//             (the on-device timers fire at minute-scale and are
-//             impractical for a live demo).
+// Three layers, all matching on-device behavior:
+//   blinks  — jibo.expression.blink() at random intervals (3-13s,
+//             matching the on-device AttentionRuleBlinkOccasionally
+//             cadence). expression.blink() is the canonical API the
+//             on-device blinker delegate calls.
+//   boredom — periodic body+head lookAt to a random nearby point.
+//             Matches the on-device AttentionRuleBoredomLook "Idle
+//             Boredom Big" rule: cadence [6, 13]s, horizontal angle
+//             up to ~1 rad, vertical 0.2-0.8 rad. This is what makes
+//             the real robot turn its body to "look around" between
+//             interactions.
+//   musings — short canned animations from @be/idle's circadian
+//             expressor. The on-device pipeline is eye-only by design
+//             (playMusing sets muteAudio:true → BODY+SCREEN muted), so
+//             this layer gives ambient eye motion that lands on top of
+//             the boredom-look's body motion. Same query filtering,
+//             animation pool, and playback path the source uses, just
+//             on a faster cadence (the on-device timers fire at minute
+//             scale and are impractical for a live demo).
 //
-// Gating: musings only fire when the @be/idle skill is the currently
-// active skill. When chitchat or any other skill takes over, musings
-// stop automatically — preventing a "look around" from talking on top
-// of a scripted response.
+// Gating: boredom + musings only fire when @be/idle is the currently
+// active skill. When chitchat or any other skill takes over, both stop
+// automatically — preventing a "look around" from running on top of
+// a scripted response.
 export function installIdleMotion(jibo) {
   if (!jibo || jibo.__idleMotionInstalled) return;
   jibo.__idleMotionInstalled = true;
@@ -1496,10 +1502,6 @@ export function installIdleMotion(jibo) {
   const ex = jibo.expression;
 
   // --- Periodic blinks ---
-  // expression.blink() is the canonical API the on-device runtime's
-  // AttentionRuleBlinkOccasionally fires through its blinker delegate.
-  // Our stub forwards it to jibo.face.eye.blink() — the same end call
-  // the on-device expression service makes after the RPC hop.
   function fireBlink() {
     try { if (ex && typeof ex.blink === 'function') Promise.resolve(ex.blink(false)).catch(() => {}); }
     catch (_) { /* */ }
@@ -1507,39 +1509,63 @@ export function installIdleMotion(jibo) {
   }
   setTimeout(fireBlink, 1500 + Math.random() * 2000);
 
-  // --- Musings ---
-  // Reach into the @be/idle skill's circadian expressor and trigger
-  // small/big musings on a configurable cadence. The expressor runs the
-  // source's full musing pipeline: weighted-random query selection
-  // filtered by holidays + date range + brightness + season, then a
-  // cancellable animation queue that plays the picked asset through
-  // animDB. We just call the entry points faster than the on-device
-  // 10/84-minute timers, gated on idle being the active skill.
-  let useBig = false;
-  function findExpressor() {
+  // --- Idle context lookup ---
+  // be.currentSkill is a getter that returns the active skill INSTANCE
+  // (via the SkillSwitchScheduler's currentSkillRedirectToken).
+  // Comparing against be.idle gives us a robust "is idle the active
+  // skill" check that doesn't depend on string names.
+  function getIdleContext() {
     const be = typeof window !== 'undefined' && window.be;
-    const idle = be && be.skills && be.skills['@be/idle'];
+    if (!be || be.currentSkill !== be.idle) return null;
+    const idle = be.idle;
     const exp = idle && idle.circadianManager && idle.circadianManager.circadianExpression;
-    return (exp && typeof exp.playSmallMusing === 'function') ? { be, idle, exp } : null;
+    return { be, idle, exp };
   }
+
+  // --- Body boredom look ---
+  // AttentionRuleBoredomLook picks a random point at horizontal angle
+  // up to maxAngleAround radians from center, vertical between
+  // minVertical and maxVertical radians, and calls expression.lookAt
+  // through lookConfigSlow / lookConfigUncommitted (slow motion
+  // profile, body + eye). We mirror those angle ranges directly. The
+  // duration covers the full slow lookat motion before the next pick.
+  function boredomLook() {
+    try {
+      const ctx = getIdleContext();
+      if (ctx && ex && typeof ex.lookAt === 'function') {
+        // Match the on-device "Idle Boredom Big" parameter set:
+        // horizontal ±1 rad, vertical 0.2-0.8 rad.
+        const yaw = (Math.random() - 0.5) * 2.0;             // ±1 rad (~±57°)
+        const pitch = 0.2 + Math.random() * 0.6;             // 0.2-0.8 rad
+        const distance = 1.6 + Math.random() * 0.6;
+        const target = {
+          x: Math.sin(yaw) * distance,
+          y: Math.sin(pitch) * distance + 0.2,
+          z: Math.cos(yaw) * distance,
+        };
+        Promise.resolve(ex.lookAt({ position: target, duration: 3500 })).catch(() => {});
+      }
+    } catch (_) { /* */ }
+    setTimeout(boredomLook, 6000 + Math.random() * 7000);    // [6, 13]s
+  }
+  setTimeout(boredomLook, 4000 + Math.random() * 3000);
+
+  // --- Musings (eye-only ambient motion) ---
+  let useBig = false;
   function fireMusing() {
     try {
-      const ctx = findExpressor();
-      // Only fire when @be/idle is the currently active skill so
-      // musings don't talk over chitchat/etc. playback.
-      if (ctx && ctx.be._currentSkill === '@be/idle') {
+      const ctx = getIdleContext();
+      if (ctx && ctx.exp && typeof ctx.exp.playSmallMusing === 'function') {
         if (useBig) ctx.exp.playBigMusing();
         else ctx.exp.playSmallMusing();
         useBig = !useBig;
       }
     } catch (_) { /* */ }
-    setTimeout(fireMusing, 10000 + Math.random() * 8000);   // 10-18s
+    setTimeout(fireMusing, 10000 + Math.random() * 8000);    // 10-18s
   }
-  // First musing fires after a longer initial delay so the boot
-  // animations + first-contact flow have time to settle.
   setTimeout(fireMusing, 12000 + Math.random() * 4000);
 
-  console.log('[live-eye] idle motion installed (blinks + musings)');
+  console.log('[live-eye] idle motion installed (blinks + boredom look + musings)');
 }
 
 export function driveEye(jibo, prep) {
