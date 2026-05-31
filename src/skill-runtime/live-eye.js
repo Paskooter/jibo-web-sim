@@ -1264,6 +1264,18 @@ export function initOfflineServices(jibo, requireFn) {
             // window.__lookatEyeDofs and mixes into face.eye.display so
             // the iris actually aims at the world target.
             window.__lookatEyeDofs = m.dofs || null;
+          } else if (m.kind === 'host-body-dofs' && m.dofs) {
+            // Host's lookat solver is driving the body each frame; mirror
+            // those values into _bodyState.lastApplied so the next animation
+            // playback computes its pose-offset against the rig's CURRENT
+            // pose (not the previous animation's end pose). Without this,
+            // body sections visibly snap from the lookat pose to wherever
+            // the next anim starts the moment a skill takes over.
+            for (const k of Object.keys(m.dofs)) {
+              if (_bodyState[k] && typeof m.dofs[k] === 'number') {
+                _bodyState[k].lastApplied = m.dofs[k];
+              }
+            }
           }
         });
       }

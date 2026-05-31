@@ -277,5 +277,14 @@ export function createLookAtController({ rig, screenMesh, emitFace, emitEyeDofs,
     }
   }
 
-  return { setTarget, update, calibrate() {}, isTracking: () => hasTarget };
+  // applied[] is the controller's current per-frame target for the three
+  // body sections (post acceleration-limited planner step). Exposing it
+  // lets the host send these values back to the iframe so its
+  // _bodyState.lastApplied stays in sync with the host-side rig pose —
+  // without that, the next animation's pose-offset computation reads a
+  // stale value and the body visibly snaps when playback starts.
+  function getAppliedBody() {
+    return { bottomSection_r: applied[0], middleSection_r: applied[1], topSection_r: applied[2] };
+  }
+  return { setTarget, update, calibrate() {}, isTracking: () => hasTarget, getAppliedBody };
 }

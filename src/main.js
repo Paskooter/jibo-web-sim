@@ -430,7 +430,22 @@ async function startSkillRuntime() {
     dofMax: viewport.rig.dofMax,
   });
   lookat.calibrate();
-  viewport.onFrame(lookat.update);
+  viewport.onFrame(() => {
+    lookat.update();
+    // Reflect the lookat's current body pose into the iframe so its
+    // _bodyState.lastApplied stays in sync. Without this, the next
+    // animation the bundle plays computes its pose offset against the
+    // PREVIOUS animation's end pose — not the rig's actual current pose
+    // — and the body visibly snaps from where the lookat had it to
+    // wherever the new anim starts from. We only push while a target
+    // is active; when lookat goes idle, the bundle's own startDofPlayback
+    // is the next thing that writes body DOFs, so lastApplied is
+    // correctly updated through that path.
+    if (lookat.isTracking()) {
+      try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'host-body-dofs', dofs: lookat.getAppliedBody() }, '*'); }
+      catch (_) { /* iframe gone */ }
+    }
+  });
 
   // Attention sources, highest precedence first:
   //   - audioAttention: transient glance toward an audio event (~1s)
