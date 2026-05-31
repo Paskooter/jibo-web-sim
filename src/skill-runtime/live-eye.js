@@ -468,7 +468,7 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
   requestAnimationFrame(tick);
 }
 
-function makeAnimInstance(requireFn, play, options, requestor) {
+function makeAnimInstance(requireFn, play, options, requestor, jibo) {
   let Event;
   try { Event = requireFn('jibo-typed-events').Event; } catch (_) { /* fall back to local emitter */ }
   const events = {};
@@ -495,6 +495,21 @@ function makeAnimInstance(requireFn, play, options, requestor) {
     const out = [];
     for (const c of channels) { const n = c.dofName || c.dof; if (n) out.push(n); }
     return out;
+  })();
+  // Build a REAL animation-utilities DOFSet from the channel names. The
+  // anim-db Playback.registerEventsAndHandlers gates face.eye.addAnimation
+  // on `dofsInScreen.minus(instance.dofs).getDOFs().length !==
+  // dofsInScreen.getDOFs().length` (jibo-anim-db.js:935-940) — a check
+  // that fails with a tolerant proxy and silently skips addAnimation,
+  // which is why JiboJi PIXI overlays (coin-flip etc.) never rendered.
+  // Build the DOFSet via jibo.expression.dofs.ALL.createFromDofs so the
+  // .minus()/getDOFs() chain returns the right counts.
+  const animDofs = (() => {
+    try {
+      const ALL = jibo && jibo.expression && jibo.expression.dofs && jibo.expression.dofs.ALL;
+      if (ALL && typeof ALL.createFromDofs === 'function') return ALL.createFromDofs(channelDofs);
+    } catch (_) { /* fall through to tolerant */ }
+    return tolerant();
   })();
   const emitStopped = (reason) => {
     if (stopped) return;
@@ -613,6 +628,12 @@ function makeAnimInstance(requireFn, play, options, requestor) {
   return new Proxy(fn, {
     get(t, p) {
       if (p === 'events') return events;
+      // dofs — REAL DOFSet built from the channels. Required by
+      // jibo-anim-db.Playback.registerEventsAndHandlers' hasScreenDOFs
+      // check (jibo-anim-db.js:935); without it, face.eye.addAnimation
+      // is silently skipped and PIXI overlays (coin-flip, JiboJis,
+      // dance flourishes) don't render.
+      if (p === 'dofs') return animDofs;
       if (p === 'state') return cancelled ? 'CANCELLED' : (stopped ? 'STOPPED' : (started ? 'PLAYING' : 'INVALID'));
       if (p === 'then' || typeof p === 'symbol') return undefined;
       // Real AnimationInstance.play(requestor) begins playback; same here for
@@ -834,11 +855,11 @@ export function installExpressionStubs(jibo, requireFn) {
     // Default 'Behavior' matches AnimationInstance.play()'s default.
     ex.createAnimation = (opts, requestor = 'Behavior') => {
       console.log('[live-eye] createAnimation:', summarize(opts), 'req=' + requestor);
-      return Promise.resolve(makeAnimInstance(requireFn, false, opts, requestor));
+      return Promise.resolve(makeAnimInstance(requireFn, false, opts, requestor, jibo));
     };
     ex.createAndPlayAnimation = (opts, requestor = 'Behavior') => {
       console.log('[live-eye] createAndPlayAnimation:', summarize(opts), 'req=' + requestor);
-      return Promise.resolve(makeAnimInstance(requireFn, true, opts, requestor));
+      return Promise.resolve(makeAnimInstance(requireFn, true, opts, requestor, jibo));
     };
     // events/features are normally set during the (skipped) expression init.
     if (!ex.events) ex.events = { dofs: { on() {}, off() {} }, kinematics: { on() {}, off() {} } };
