@@ -221,19 +221,63 @@ function mergeObj(a, b) {
   return Object.assign({}, a, b);
 }
 
-// Expand `[stem?suffix?suffix2]` into [stem, stem+suffix, stem+suffix+suffix2].
-// `[salutation?s]` → ['salutation', 'salutations'].
-// `[the?atre?atre]` → ['the','theatre','theatreatre'] (silly example).
-// Each `?X` adds an optional suffix the matcher considers as a variant.
+// Expand a char-class body into all literal word variants. The cloud's
+// charrulecontent grammar (jibo-nlu compiler.ypp:196-204) accepts the SAME
+// constructs as the outer rule grammar — concatenation, `|` alternation,
+// `?X` optionals, `(...)` grouping — applied character-by-character with no
+// inter-token space. So:
+//   `[salutation?s]`   → ['salutation', 'salutations']
+//   `[danc(e|(ing))]`  → ['dance', 'dancing']
+//   `[do?(ing)]`       → ['do', 'doing']
+//   `[is?(n\'t)]`      → ['is', "isn't"]
+//   `[ha(s|(ve))?(n\'t)]` → ['has','have',"hasn't","haven't"]
+// Implementation: recursive descent over the body that returns the full set
+// of strings each subexpression can produce. Cross-products on concatenation,
+// union on `|`, `['', X]` on `?X`.
 function expandCharClass(body) {
-  const parts = body.split('?');
-  const out = [parts[0]];
-  let acc = parts[0];
-  for (let i = 1; i < parts.length; i += 1) {
-    acc += parts[i];
-    out.push(acc);
+  let pos = 0;
+  function parseAlt() {
+    const out = [...parseSeq()];
+    while (pos < body.length && body[pos] === '|') {
+      pos += 1;
+      out.push(...parseSeq());
+    }
+    return out;
   }
-  return out;
+  function parseSeq() {
+    let acc = [''];
+    while (pos < body.length && body[pos] !== '|' && body[pos] !== ')') {
+      const part = parseItem();
+      if (!part.length) continue;
+      const next = [];
+      for (const a of acc) for (const b of part) next.push(a + b);
+      acc = next;
+    }
+    return acc;
+  }
+  function parseItem() {
+    if (body[pos] === '?') {
+      pos += 1;
+      const sub = parseAtom();
+      return ['', ...sub];
+    }
+    return parseAtom();
+  }
+  function parseAtom() {
+    if (body[pos] === '(') {
+      pos += 1;
+      const r = parseAlt();
+      if (body[pos] === ')') pos += 1;
+      return r;
+    }
+    let s = '';
+    while (pos < body.length && !/[?()|]/.test(body[pos])) {
+      if (body[pos] === '\\' && pos + 1 < body.length) { s += body[pos + 1]; pos += 2; continue; }
+      s += body[pos]; pos += 1;
+    }
+    return [s];
+  }
+  return parseAlt();
 }
 
 // Public: try to match a TopRule against the input tokens. Returns the BEST
