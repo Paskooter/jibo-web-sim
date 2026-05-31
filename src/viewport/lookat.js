@@ -41,6 +41,18 @@ const TORSO_CONE = 0.29670632;
 // LookatNodeRuntimeConfig (base 3, torso 2.5, top 3).
 const ACCEL = { bottom: 3.0, middle: 2.5, top: 3.0 };
 
+// Eye DOF geometry — animation-utilities.js:2329-2348 LookatDOFGeometryConfig.
+// EyeLeftRight (eyeSubRootBn_t):  InternalDistance 0.0165, range ±0.03450608.
+// EyeUpDown    (eyeSubRootBn_t_2): InternalDistance 0.013,  range ±0.00609551.
+// The eye is rendered on the screen plane; the iris translates in screen-local
+// space and the apparent gaze direction is `atan(translation / InternalDistance)`.
+// Inverting: to gaze at residual angle θ, set translation = InternalDistance * tan(θ),
+// clamped to ±MaxValue. Small-angle: linear in θ.
+const EYE_LR_DIST = 0.0165;
+const EYE_LR_MAX  = 0.03450607937;
+const EYE_UD_DIST = 0.013;
+const EYE_UD_MAX  = 0.00609550625;
+
 // Acceleration-limited trapezoidal motion planner — a port of
 // AccelPlanner.computeWithFixedAccel + AccelPlan (ifr-motion/base/AccelPlanner).
 // Plans a trip of `pDelta` from velocity `v0`, decelerating to a stop, never
@@ -120,7 +132,7 @@ function coneSolve(transform, rest, planeNormal, dist, target, coneAngle) {
   return [rN2B + rBack, rN2B + other];
 }
 
-export function createLookAtController({ rig, screenMesh, emitFace, isBusy, dofMax = 3.0 }) {
+export function createLookAtController({ rig, screenMesh, emitFace, emitEyeDofs, isBusy, dofMax = 3.0 }) {
   const frames = rig.frames;
   const root = rig.root;
 
@@ -152,22 +164,36 @@ export function createLookAtController({ rig, screenMesh, emitFace, isBusy, dofM
   let wasBusy = false;
 
   const c = new THREE.Vector3(), n = new THREE.Vector3();
+  // World-space face-LOCAL right + up axes (computed alongside the normal so the
+  // residual gaze can be split into yaw + pitch in the face's own frame, rather
+  // than just world-vertical elevation).
+  const faceRight = new THREE.Vector3(), faceUp = new THREE.Vector3();
   const a = new THREE.Vector3(), b = new THREE.Vector3();
 
   function faceNormalElev() {
     screenMesh.updateWorldMatrix(true, false);
     const m = screenMesh.matrixWorld;
     a.copy(corners[iTR]).applyMatrix4(m).sub(b.copy(corners[iTL]).applyMatrix4(m));
+    // a is the screen's local +X in world (TL→TR). Save normalized as faceRight.
+    faceRight.copy(a).normalize();
     const tl = b.clone();
     b.copy(corners[iBL]).applyMatrix4(m).sub(tl);
+    // b is the screen's local -Y (TL→BL). Save +Y as faceUp.
+    faceUp.copy(b).negate().normalize();
     n.crossVectors(a, b).normalize();
     c.copy(localCenter).applyMatrix4(m);
-    if (n.x * c.x + n.z * c.z < 0) n.negate();
+    if (n.x * c.x + n.z * c.z < 0) { n.negate(); faceRight.negate(); }
   }
 
   function setTarget(v) {
     if (v) { target.set(v.x, v.y, v.z); hasTarget = true; }
-    else { hasTarget = false; emitFace('look', { x: 0, y: 0 }); }
+    else {
+      hasTarget = false;
+      emitFace('look', { x: 0, y: 0 });
+      // Re-center the real eye DOFs too — without this, releasing a be-side
+      // lookAt would leave the iris frozen at the last residual position.
+      if (emitEyeDofs) emitEyeDofs({ eyeSubRootBn_t: 0, eyeSubRootBn_t_2: 0 });
+    }
   }
 
   function update() {
@@ -210,12 +236,45 @@ export function createLookAtController({ rig, screenMesh, emitFace, isBusy, dofM
     rig.setDof('middleSection_r', applied[1]);
     rig.setDof('topSection_r', applied[2]);
 
-    // Eye covers the residual vertical gaze the head couldn't reach.
+    // Eye covers the residual gaze the head couldn't reach. The body
+    // does its best to point n→target; whatever's left is the angular
+    // gap between n and (target-c), which we split into yaw + pitch in
+    // the FACE-LOCAL frame (using faceRight + faceUp built alongside n).
     faceNormalElev();
     const des = target.clone().sub(c).normalize();
+
+    // World-vertical elevation residual — kept for the SHIM eye driver
+    // (emitFace), which expects a single normalized [-1,1] y value.
     const residElev = Math.asin(THREE.MathUtils.clamp(des.y, -1, 1))
       - Math.asin(THREE.MathUtils.clamp(n.y, -1, 1));
     emitFace('look', { x: 0, y: THREE.MathUtils.clamp(-residElev * 1.8, -1, 1) });
+
+    // Real-runtime eye DOFs: project des into face-local coords so we
+    // can derive yaw (around faceUp) and pitch (around faceRight)
+    // independently of world up. Map each angle into its eye DOF via
+    // InternalDistance * tan(angle), clamped to MaxValue. The bundle's
+    // FaceRenderer reads these as eye-iris screen translations and
+    // renders the iris offset accordingly — producing the apparent
+    // gaze toward the world target.
+    if (emitEyeDofs) {
+      const dx = des.dot(faceRight);      // +right of face
+      const dy = des.dot(faceUp);         // +up of face
+      const dz = des.dot(n);              // +forward (face normal)
+      // Yaw: angle in the horizontal (face-right × face-forward) plane.
+      // Pitch: angle in the vertical (face-up × face-forward) plane.
+      // atan2(opp, adj) — adj is the forward component, opp is the
+      // sideways/vertical. Clamp the angle pre-tan to avoid blowup
+      // when the target is behind the face (dz <= 0 → eye saturates).
+      const yawRad   = Math.atan2(dx, Math.max(dz, 1e-3));
+      const pitchRad = Math.atan2(dy, Math.max(dz, 1e-3));
+      // Sign convention check: when target is to the FACE'S RIGHT (dx>0),
+      // we want the iris to shift right on the screen so the apparent
+      // gaze line aims at the target. That's +eyeSubRootBn_t.
+      // When target is above (dy>0), iris shifts up = +eyeSubRootBn_t_2.
+      const tLR = THREE.MathUtils.clamp(EYE_LR_DIST * Math.tan(THREE.MathUtils.clamp(yawRad, -1.2, 1.2)), -EYE_LR_MAX, EYE_LR_MAX);
+      const tUD = THREE.MathUtils.clamp(EYE_UD_DIST * Math.tan(THREE.MathUtils.clamp(pitchRad, -1.2, 1.2)), -EYE_UD_MAX, EYE_UD_MAX);
+      emitEyeDofs({ eyeSubRootBn_t: tLR, eyeSubRootBn_t_2: tUD });
+    }
   }
 
   return { setTarget, update, calibrate() {}, isTracking: () => hasTarget };

@@ -263,6 +263,14 @@ async function startSkillRuntime() {
       // lower-precedence lpsTarget (if any) takes over, else lookat goes idle.
       beTarget = null;
       applyAttention();
+    } else if (m.kind === 'led-color' && Array.isArray(m.rgb) && m.rgb.length === 3 && viewport.rig.setLEDColor) {
+      // jibo.expression.setLEDColor([r,g,b]) from a skill — the real bundle
+      // drives the lightring's color/intensity DOFs at the expression service
+      // level; we drive the rig's lightring mesh directly with the same
+      // [0,1]-normalized RGB tuple the source contract specifies
+      // (Expression.ts:312-314 setLEDColor(colors:[number,number,number])).
+      const [r, g, b] = m.rgb;
+      try { viewport.rig.setLEDColor(r, g, b); } catch (_) { /* */ }
     } else if (m.kind === 'dofs' && m.dofs && viewport.rig) {
       // jibo-be animation playback (expression.createAndPlayAnimation) — the
       // skill-runtime samples the animation's channels per frame and posts the
@@ -390,6 +398,15 @@ async function startSkillRuntime() {
     rig: viewport.rig,
     screenMesh,
     emitFace: (event, data) => bridge.emit('face', event, data),
+    // Real-runtime eye DOFs: jibo-be's PixiJS FaceRenderer expects
+    // eyeSubRootBn_t / eyeSubRootBn_t_2 (iris screen translation) per
+    // frame; live-eye.js writes them into __activeAnimDofs so driveEye
+    // mixes them into face.eye.display. Skip when an animation is
+    // already writing eye DOFs — animations are higher priority than
+    // lookat residual gaze and shouldn't be overridden mid-saccade.
+    emitEyeDofs: (dofs) => {
+      try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'eye-lookat-dofs', dofs }, '*'); } catch (_) { /* gone */ }
+    },
     isBusy: () => animation.isActive(),
     dofMax: viewport.rig.dofMax,
   });

@@ -549,8 +549,8 @@ function makeAnimInstance(requireFn, play, options, requestor) {
 const EXPRESSION_METHODS = [
   'destroyCaches',
   'setAttentionMode', 'pushAttentionMode', 'popAttentionMode', 'getAttentionMode',
-  'setLEDColor', 'indexRobot', 'setSkillRoot',
-  'blink', 'doCenterRobotOnDisconnect', 'subscribe', 'unsubscribe',
+  'indexRobot', 'setSkillRoot',
+  'doCenterRobotOnDisconnect', 'subscribe', 'unsubscribe',
 ];
 
 // Build a real AcquireHandle the source returns from acquireTarget/awaitFace.
@@ -647,6 +647,32 @@ export function installExpressionStubs(jibo, requireFn) {
         dofArbiter.centerWithHybridPriority(req, trustee, dofSet, opts.owners || null, false, () => resolve());
       } catch (_) { resolve(); }
     });
+    // blink — trigger a one-shot eye blink. Source (Expression.ts:321):
+    // expression.blink(interrupt?) → animate.blink() → drives the eye
+    // overlay's blink animation. In our port jibo.face.eye.blink() is
+    // available directly on the bundle's FaceRenderer; call it so
+    // skills that periodically blink (e.g. idle skill heartbeat,
+    // @be/who-am-i question pauses) produce visible blinks.
+    ex.blink = (interrupt) => {
+      try {
+        const eye = jibo && jibo.face && jibo.face.eye;
+        if (eye && typeof eye.blink === 'function') eye.blink(interrupt);
+      } catch (_) { /* eye not ready */ }
+      return Promise.resolve();
+    };
+    // setLEDColor — drive the rig's lightring mesh. Source contract
+    // (Expression.ts:312-314): setLEDColor(colors:[number,number,number])
+    // with each component normalized [0,1]. Skills that pulse the ring
+    // (idle skill heartbeat, listening-state LED) now produce visible
+    // color changes on the viewport's lightring instead of vanishing.
+    ex.setLEDColor = (colors) => {
+      try {
+        if (Array.isArray(colors) && colors.length === 3) {
+          window.parent.postMessage({ __jibo: true, kind: 'led-color', rgb: colors }, '*');
+        }
+      } catch (_) { /* */ }
+      return Promise.resolve();
+    };
     // acquireTarget — drive the body+eye lookat solver toward a world target.
     // Source (Expression.ts:245-254) creates an AcquireHandle (server-side
     // tracker that subscribes the attention manager to a target). Our impl
@@ -1018,7 +1044,8 @@ export function initOfflineServices(jibo, requireFn) {
       const origPlay = Sound.prototype.play;
       let _seq = 0;
       if (!window.__pendingSounds) window.__pendingSounds = new Map();
-      // One bridge listener picks up sound-done events from the host.
+      // One bridge listener picks up sound-done events + lookat eye DOFs
+      // from the host. (Both ride on the same window 'message' channel.)
       if (!window.__soundBridgeInstalled) {
         window.__soundBridgeInstalled = true;
         window.addEventListener('message', (ev) => {
@@ -1028,6 +1055,12 @@ export function initOfflineServices(jibo, requireFn) {
             const fin = window.__pendingSounds.get(m.id);
             window.__pendingSounds.delete(m.id);
             try { fin(); } catch (_) { /* */ }
+          } else if (m.kind === 'eye-lookat-dofs') {
+            // Host's createLookAtController emits residual eye DOFs every
+            // frame the body lookat is engaged. driveEye's tick reads
+            // window.__lookatEyeDofs and mixes into face.eye.display so
+            // the iris actually aims at the world target.
+            window.__lookatEyeDofs = m.dofs || null;
           }
         });
       }
@@ -1283,6 +1316,18 @@ export function driveEye(jibo, prep) {
       const t = performance.now() / 1000;
       const frame = Object.assign({}, dofs);
       frame.eyeSubRootBn_t_2 = (dofs.eyeSubRootBn_t_2 || 0) + Math.sin(t * 1.2) * 0.0015;
+      // Apply residual eye-gaze DOFs from the host's lookat solver. The host
+      // computes how far the head's pointing missed the target and maps the
+      // remainder to eyeSubRootBn_t (yaw → horizontal iris shift) /
+      // eyeSubRootBn_t_2 (pitch → vertical iris shift) via the animation-
+      // utilities EyeLeftRight/EyeUpDown geometry config. Apply BEFORE the
+      // active-anim overlay below so a real animation playing on the eye
+      // (e.g. dance saccades) wins over the residual.
+      const lookatEye = window.__lookatEyeDofs;
+      if (lookatEye) {
+        if (typeof lookatEye.eyeSubRootBn_t === 'number') frame.eyeSubRootBn_t = lookatEye.eyeSubRootBn_t;
+        if (typeof lookatEye.eyeSubRootBn_t_2 === 'number') frame.eyeSubRootBn_t_2 = lookatEye.eyeSubRootBn_t_2 + Math.sin(t * 1.2) * 0.0015;
+      }
       // Overlay any active skill-driven animation DOFs (eye/screen/overlay only —
       // body sections go to the host viewport). startDofPlayback() in this file
       // writes into window.__activeAnimDofs; consume them as a per-frame mix-in
