@@ -32,12 +32,18 @@ function freshEnts(prev) { return Object.assign({}, prev); }
 // keep them whole and let rules handle `i\'m` literals as one token.
 export function tokenize(text) {
   if (!text) return [];
+  // Strip apostrophes: typed input frequently lacks them ("whats" vs "what's"),
+  // and ASR transcripts vary. Comparing both sides apostrophe-free in `lit`
+  // matching makes `what's` in the rule and "whats" in the input equivalent.
   return text
     .toLowerCase()
+    .replace(/['’]/g, '')
     .replace(/[.,!?;:]+/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
 }
+// Same strip applied to rule lits so they compare equal to tokenized input.
+function _norm(s) { return String(s).toLowerCase().replace(/['’]/g, ''); }
 
 // Apply tag specs (from a node's .tags) against a sub-match's subFields,
 // producing entity updates for the parent. `lit` tags drop their value as-is;
@@ -67,10 +73,10 @@ function* match(node, start, ctx, depth) {
 
   switch (node.type) {
     case 'lit': {
-      // Lowercased equality. Word may contain escapes / `'` / `@` etc.
+      // Lowercased + apostrophe-stripped equality (see tokenize/_norm).
       // specificity: 1 — a literal token in the rule counts toward specificity,
       // which the registry uses to break ties between candidate skills.
-      if (start < tokens.length && tokens[start] === node.word.toLowerCase()) {
+      if (start < tokens.length && tokens[start] === _norm(node.word)) {
         const ent = freshEnts(EMPTY); const sub = freshEnts(EMPTY);
         const tagged = applyTags(node.tags, ent, sub, { /* no sub */ });
         yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields, specificity: 1 };
@@ -84,7 +90,7 @@ function* match(node, start, ctx, depth) {
       // the next input token.
       const variants = expandCharClass(node.body);
       for (const v of variants) {
-        if (start < tokens.length && tokens[start] === v.toLowerCase()) {
+        if (start < tokens.length && tokens[start] === _norm(v)) {
           const tagged = applyTags(node.tags, EMPTY, EMPTY, {});
           yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields, specificity: 1 };
         }

@@ -1,0 +1,47 @@
+TopRule = ($YESNO) {_nl=YESNO._yes_no}{%delete this.YESNO%};
+
+#Purposely written without toprule wildcards
+#Reusable yes/no
+
+
+YESNO =
+		$YES {_yes_no='yes'} |
+		$NO {_yes_no='no'}
+;
+
+YES = ?why
+	(
+		(($YES_BASIC | $YES_OKAY) ?$PLEASE) |
+		($YES_BASIC $YES_OKAY ?$PLEASE) |
+		(?($YES_BASIC | $YES_OKAY) $YES_SUPPOSE) |
+		(?$YES_BASIC $CERTAINLY ?$YES_BASIC) |
+		(?($YES_BASIC | $YES_OKAY) $CONFIRM ?($PLEASE|$THANKS))|
+		(?$CERTAINLY ?$YES_BASIC $YES_YOUGOTIT) |
+		($PLEASE ?$YES_BASIC)
+	)
+;
+
+NO =
+	(
+		(?$NO_BASIC $NO_BASIC ?$THANKS) |
+		($NO_BASIC|$NO_NOT ?$PLEASE) |
+		(?$NO_BASIC $CERTAINLY ($* $NO_BASIC|$NO_NOT)) |
+		(?$NO_BASIC $PLEASE ($NO_BASIC|$NO_NOT)) |
+		(?$NO_BASIC $DISCONFIRM ?($PLEASE | $THANKS)) |
+		(?$NO_BASIC $NO_LONG ?$THANKS)
+	)
+;
+
+### USEFUL VOCABULARY ###
+YES_BASIC = yes | yeah | sure | yep | yup | ya;
+YES_OKAY = okay | fine | alright | (all right);
+YES_SUPPOSE = i (think | suppose | guess) ?so;
+YES_YOUGOTIT = you got it;
+CERTAINLY = ?most (certainly | definitely | absolutely | obviously | totally | def | (of course));
+PLEASE = please ?do;
+NO_BASIC = no | nope | na | nah;
+NO_NOT = not | don\'t | (do not);
+THANKS = thanks | (thank you);
+CONFIRM = (i (do|am|would)) | (we (do|are|would));
+DISCONFIRM = (i (do|am|would) not) | (we (do|are|would) not) | ((i|we) (don\'t|wouldn\'t)) | (i\'m not);
+NO_LONG= (i (suppose|guess) not) | (i (don\'t|wouldn\'t) think so);

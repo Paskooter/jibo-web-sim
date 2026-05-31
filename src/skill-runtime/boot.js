@@ -29,14 +29,29 @@ import { createRegistry } from './nlu/index.js';
 // order for first-match-wins.
 const _nluRegistry = createRegistry();
 const _nluReady = (async () => {
+  // Voice-launchable @be/* skills with a launch.rule. The rest (first-contact,
+  // surprises, restore, introductions, tutorial, exercise, hue-control, remote,
+  // word-of-the-day) are either internal-only flows or fully cloud-driven —
+  // they have no on-robot launch.rule to wire up. nimbus has a one-liner
+  // launch rule (`do nimbus`).
   const skills = ['clock', 'main-menu', 'settings', 'greetings', 'who-am-i',
                   'friendly-tips', 'gallery', 'create', 'circuit-saver',
-                  'idle', 'ifttt', 'chitchat'];
+                  'idle', 'ifttt', 'chitchat', 'nimbus'];
   for (const s of skills) {
     try { await _nluRegistry.loadSkill('@be/' + s, '/assets/be-rules/' + s + '/launch.rule'); }
     catch (e) { console.warn('[nlu] skill load failed:', s, e.message); }
   }
-  console.log('[nlu] registry loaded', _nluRegistry._skills.length, 'skill rule(s)');
+  // Factory grammars (yes_no, date, time, world_city_country, ...) expand
+  // `$factory:NAME` refs in skill rules to real content instead of the 1-3
+  // word wildcard fallback in matcher.js. Source: jibo-nlu-data/en-us/factory_rules.
+  // yes_no is by far the most important — every MIM yes/no prompt uses it.
+  const factories = ['yes_no'];
+  for (const f of factories) {
+    try { await _nluRegistry.loadFactory(f, '/assets/be-rules/factory/' + f + '.grm'); }
+    catch (e) { console.warn('[nlu] factory load failed:', f, e.message); }
+  }
+  console.log('[nlu] registry loaded', _nluRegistry._skills.length, 'skill rule(s),',
+              Object.keys(_nluRegistry._factories).length, 'factory grammar(s)');
 })();
 
 const params = new URLSearchParams(location.search);

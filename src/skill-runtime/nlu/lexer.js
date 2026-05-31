@@ -134,6 +134,16 @@ export function lex(source) {
     // Punctuation.
     if (ch === '(') { advance(); push('LPAREN', '('); continue; }
     if (ch === ')') { advance(); push('RPAREN', ')'); continue; }
+    // `{% js... %}` — inline JavaScript blocks that run on the parse result
+    // (e.g. `{%delete this.YESNO%}` in factory yes_no.grm). The cloud's parser
+    // executes them via a V8 interpreter; we don't run JS on parse results, so
+    // skip the whole block. Must come before the general `{` punctuation case.
+    if (ch === '{' && source[i + 1] === '%') {
+      advance(2);
+      while (i < N && !(source[i] === '%' && source[i + 1] === '}')) advance();
+      if (i < N) advance(2);
+      continue;
+    }
     if (ch === '{') { advance(); push('LBRACE', '{'); continue; }
     if (ch === '}') { advance(); push('RBRACE', '}'); continue; }
     if (ch === '|') { advance(); push('PIPE', '|'); continue; }

@@ -19,6 +19,11 @@ export function createRegistry() {
   // Per-skill loaded data: { skillID: { rules: {ruleName: AstNode}, topRuleName: string } }.
   // topRuleName is whatever the rule file declared first (typically 'TopRule').
   const skills = [];
+  // Loaded factory grammars: name -> { rules, topRule }. Used by matcher's
+  // factoryHook to expand `$factory:NAME` against real grammar instead of the
+  // 1-3-word wildcard fallback. Factory names match the file basename (e.g.
+  // `yes_no.grm` registers as `yes_no`, matched by `$factory:yes_no`).
+  const factories = {};
 
   async function loadSkill(skillID, ruleSourceOrUrl, opts = {}) {
     let source = ruleSourceOrUrl;
@@ -43,16 +48,47 @@ export function createRegistry() {
     });
   }
 
+  // Load a factory grammar (yes_no.grm, date.grm, etc.) so `$factory:NAME`
+  // refs in skill rules match real content instead of falling back to wildcards.
+  // Factory grammars are the same .rule DSL — they live in jibo-nlu-data/en-us/
+  // factory_rules/ in the source-of-truth tree.
+  async function loadFactory(name, sourceOrUrl) {
+    let source = sourceOrUrl;
+    if (/^https?:|^\//.test(sourceOrUrl)) {
+      const r = await fetch(sourceOrUrl);
+      if (!r.ok) throw new Error(`loadFactory ${name}: HTTP ${r.status} ${sourceOrUrl}`);
+      source = await r.text();
+    }
+    const ast = parseRules(source);
+    const ruleNames = Object.keys(ast.rules);
+    const topRuleName = ast.rules.TopRule ? 'TopRule' : ruleNames[0];
+    if (!topRuleName) throw new Error(`loadFactory ${name}: no rules in source`);
+    factories[name] = { rules: ast.rules, topRule: ast.rules[topRuleName] };
+  }
+
+  // factoryHook (used by matcher.js) — looks up a factory by name and returns
+  // its top rule AST so it gets expanded inline. The factory's own sub-rules
+  // are available via the same `rules` map merged into the matcher context.
+  function factoryHook(name) {
+    const f = factories[name];
+    return f ? f.topRule : null;
+  }
+
   function parse(text) {
     const tokens = tokenize(text);
     if (tokens.length === 0) return null;
+    // Merge each skill's rule map with factory sub-rules so factory inner
+    // refs (e.g. YES, NO inside yes_no.grm) resolve during the walk.
+    const factoryRules = {};
+    for (const f of Object.values(factories)) Object.assign(factoryRules, f.rules);
     // Score every skill's best full-input match and pick the most specific
     // overall — a clock rule like `what time is it` beats a friendly-tips rule
     // shaped as `$* do $*` because the former matches 4 literal tokens vs the
     // latter's 1. On ties, earlier-registered skills win.
     let winner = null;
     for (const skill of skills) {
-      const m = matchRule(skill.topRule, tokens, { rules: skill.rules });
+      const mergedRules = Object.assign({}, factoryRules, skill.rules);
+      const m = matchRule(skill.topRule, tokens, { rules: mergedRules, factoryHook });
       if (!m) continue;
       const spec = m.specificity || 0;
       if (!winner || spec > winner.specificity) winner = { skill, m, specificity: spec };
@@ -75,5 +111,5 @@ export function createRegistry() {
     };
   }
 
-  return { loadSkill, parse, _skills: skills };
+  return { loadSkill, loadFactory, parse, _skills: skills, _factories: factories };
 }
