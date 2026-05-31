@@ -318,33 +318,8 @@ async function startSkillRuntime() {
   // shim skills, and also into the iframe so real-runtime jibo-be can inject it
   // via MimManager.handleSpeech — the same path the original simulator used to
   // turn typed lines into user utterances.
-  // Sticky "look at user" — when text is sent (or audio arrives), point the
-  // body's lookat solver at the viewport camera so Jibo turns to face the
-  // viewer. Mirrors what the real robot does via the AttentionManager's
-  // audible-target acquisition. Held for SPEAK_GAZE_MS after the most
-  // recent input so brief pauses between utterances don't cause the head
-  // to swing away mid-conversation; refreshed on every new message.
-  const SPEAK_GAZE_MS = 6000;
-  let speakGazeTimer = 0;
-  const camTarget = new THREE.Vector3();
-  function lookAtUser() {
-    camTarget.setFromMatrixPosition(viewport.camera.matrixWorld);
-    beTarget = { x: camTarget.x, y: camTarget.y, z: camTarget.z };
-    applyAttention();
-    if (speakGazeTimer) clearTimeout(speakGazeTimer);
-    speakGazeTimer = setTimeout(() => {
-      // Only clear if no other source (audio glance / skill-driven
-      // acquireTarget) has taken over the be-side attention since.
-      if (beTarget && beTarget.x === camTarget.x && beTarget.y === camTarget.y && beTarget.z === camTarget.z) {
-        beTarget = null;
-        applyAttention();
-      }
-      speakGazeTimer = 0;
-    }, SPEAK_GAZE_MS);
-  }
   chat.setSendHandler((text) => {
     asr.recognize(text);
-    lookAtUser();
     try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'utterance', text }, '*'); } catch (_) { /* iframe gone */ }
   });
 
