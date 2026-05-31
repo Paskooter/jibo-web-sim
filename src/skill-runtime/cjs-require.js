@@ -249,10 +249,15 @@ function makeHttpFs() {
   // so the unrewritten path fails the manifest check and synthesizes
   // ENOENT before HTTP ever sees the URL.
   const ANIM_DB_TEX = '/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/';
-  const BE_TEX_RE = /^(.*?)\/@be\/[^/]+\/animations\/textures\/([^/?#]+)$/;
+  // Capture the SUBPATH after animations/textures/ — not just a single
+  // filename — because anim-db textures are organized in subdirectories
+  // (e.g. jibojis/coin-flip/coin-tails.png). Earlier version only
+  // matched a leaf filename so multi-segment paths fell through and
+  // returned ENOENT.
+  const BE_TEX_RE = /^(.*?)\/@be\/[^/]+\/animations\/textures\/(.+?)(\?.*)?$/;
   function rewriteAnimTexture(p) {
     const m = BE_TEX_RE.exec(String(p));
-    return m ? ANIM_DB_TEX + m[2] : p;
+    return m ? ANIM_DB_TEX + m[2] + (m[3] || '') : p;
   }
   function mapUrl(p) {
     p = String(p);

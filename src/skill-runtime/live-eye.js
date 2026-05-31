@@ -208,24 +208,30 @@ function sampleChannel(times, values, t) {
   return values[i - 1] + (values[i] - values[i - 1]) * a;
 }
 
-// Per-body-DOF motion state — analogous to the real-robot
-// `PoseOffsetFilterWindup` that animation-utilities runs on each joint.
-// The animation provides per-frame TARGET values; the planner advances
-// `applied` toward `target` under an acceleration limit, preserving
-// velocity continuity across animation boundaries. This is what produces
-// smooth, natural transitions on a real robot — fast for small offsets,
-// longer for large jumps, never instantaneous.
+// Per-body-DOF motion state — port of animation-utilities'
+// `PoseOffsetFilter` (animation-utilities.js:16860+). The model:
+//
+//   applied(t) = anim_value(t) + offset(t)
+//
+// `offset` starts at (prev_applied - anim_value(0)) so applied(0) =
+// prev_applied (no snap) and decays to 0 via an acceleration-limited
+// trapezoidal planner. Once offset is 0, applied tracks anim_value
+// exactly — so the ANIMATION PLAYS AT FULL FIDELITY (no smoothing
+// of the keyframes themselves). Only the transition from the rig's
+// previous pose into the new animation is rate-limited.
 //
 // Default body accel = 3 rad/s² (LookatNodeRuntimeConfig in
-// animation-utilities.js:2370 — bottom 3, middle 2.5, top 3). The
-// source's LinearTransitionBuilder defaults to 1s fixed transition;
-// using accel limits scales transition duration with offset magnitude
-// (sqrt(2*offset/accel) for a stop-at-target trapezoid), which feels
-// more natural than a fixed time.
+// animation-utilities.js:2370 — bottom 3, middle 2.5, top 3). For a
+// 1-rad offset that takes ~0.82s to decay; for a 0.3-rad offset
+// ~0.45s — natural scaling with offset magnitude, never a fixed time.
+//
+// `lastApplied` is the rig's current actual pose; carried across
+// animation boundaries so the next anim's startPlayback knows where
+// the body is when computing its initial offset.
 const _bodyState = {
-  bottomSection_r: { applied: 0, vel: 0, accel: 3.0 },
-  middleSection_r: { applied: 0, vel: 0, accel: 2.5 },
-  topSection_r:    { applied: 0, vel: 0, accel: 3.0 },
+  bottomSection_r: { offset: 0, offsetVel: 0, lastApplied: 0, accel: 3.0 },
+  middleSection_r: { offset: 0, offsetVel: 0, lastApplied: 0, accel: 2.5 },
+  topSection_r:    { offset: 0, offsetVel: 0, lastApplied: 0, accel: 3.0 },
 };
 // LED color channels — applied directly (no motion planner; color
 // transitions look weird if they coast past their target).
@@ -357,13 +363,39 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
   const durSec = durMs / 1000;
   let lastFrameMs = startMs;
   const BODY_DOFS_PLANNED = Object.keys(_bodyState);   // bottom/middle/top sections
+
+  // PoseOffsetFilter init: capture per-body-DOF offset = current rig
+  // pose minus animation's t=0 value. The offset decays to 0 via the
+  // acceleration-limited planner over the first frames of playback,
+  // so the rig eases from where it was into the animation track —
+  // WITHOUT slowing the animation itself. Velocity starts at 0 (the
+  // simplest correct initial condition; preserving prev-anim velocity
+  // would require tracking applied-velocity which adds complexity for
+  // little perceptible gain).
+  const t0Samples = {};
+  for (const ch of channels) {
+    const name = ch.dofName || ch.dof;
+    if (name && BODY_DOFS_PLANNED.indexOf(name) >= 0) {
+      t0Samples[name] = sampleChannel(ch.times || [], ch.values || [], 0);
+    }
+  }
+  for (const name of BODY_DOFS_PLANNED) {
+    const state = _bodyState[name];
+    if (name in t0Samples) {
+      state.offset = state.lastApplied - t0Samples[name];
+      state.offsetVel = 0;
+    }
+    // For DOFs this animation doesn't touch, leave offset/vel alone — the
+    // joint just holds its current pose (lastApplied is unchanged below).
+  }
+
   const tick = () => {
     if (isStopped()) { window.__activeAnimDofs = null; return; }
     const nowMs = performance.now();
     const elapsedSec = (nowMs - startMs) / 1000;
     const t = Math.min(elapsedSec, durSec);
-    // Per-frame dt for the motion planner. Cap at 50ms — large tab-blur
-    // gaps shouldn't let the rig fly to the target in one giant leap.
+    // Per-frame dt for the offset planner. Cap at 50ms — large tab-blur
+    // gaps shouldn't let the offset decay in one giant leap.
     let dt = (nowMs - lastFrameMs) / 1000;
     if (dt > 0.05) dt = 0.05;
     lastFrameMs = nowMs;
@@ -377,30 +409,38 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
       } catch (_) { /* malformed channel */ }
     }
 
-    // BODY DOFs go through the acceleration-limited planner — the same
-    // PoseOffsetFilter behavior the real expression service runs. Each
-    // joint integrates `applied` toward the animation's sampled TARGET
-    // under its acceleration limit, preserving velocity continuity
-    // across animation boundaries. For DOFs the animation doesn't
-    // define, the target stays at the current applied value (the rig
-    // holds its pose for that joint).
+    // BODY DOFs: applied = anim_value + decaying_offset. The animation
+    // value plays unfiltered (full keyframe fidelity, no smoothing).
+    // The offset decays toward 0 via acceleration-limited motion so
+    // the transition from the rig's prior pose into the animation
+    // happens smoothly without affecting in-animation playback speed.
     const bodyDofs = {};
     let hasBody = false;
     for (const name of BODY_DOFS_PLANNED) {
       const state = _bodyState[name];
-      const target = (name in sampled) ? sampled[name] : state.applied;
-      if (dt > 0) {
-        const plan = planFixedAccel(state.vel, target - state.applied, state.accel);
+      // Decay the offset toward 0. planFixedAccel handles direction
+      // sign; we pass pDelta = -offset to drive it back to zero.
+      if (dt > 0 && Math.abs(state.offset) > 1e-5) {
+        const plan = planFixedAccel(state.offsetVel, -state.offset, state.accel);
         if (plan) {
-          state.applied += planDisplacement(plan, dt);
-          state.vel      = planVelocity(plan, dt);
+          state.offset    += planDisplacement(plan, dt);
+          state.offsetVel  = planVelocity(plan, dt);
         } else {
-          // Degenerate plan (target reached, zero delta) — hold.
-          state.vel = 0;
+          state.offset = 0; state.offsetVel = 0;
         }
+      } else {
+        state.offset = 0; state.offsetVel = 0;
       }
-      bodyDofs[name] = state.applied;
-      hasBody = true;
+      if (name in sampled) {
+        state.lastApplied = sampled[name] + state.offset;
+        bodyDofs[name] = state.lastApplied;
+        hasBody = true;
+      } else if (Math.abs(state.offset) > 1e-5) {
+        // DOF not in animation but offset still decaying — still post.
+        state.lastApplied = (state.lastApplied - state.offset) + state.offset;
+        bodyDofs[name] = state.lastApplied;
+        hasBody = true;
+      }
     }
     // LEDs aren't motion — apply the sampled value directly so animated
     // color sweeps render crisply (no acceleration limit on hue).
@@ -416,10 +456,12 @@ function startDofPlayback(options, durMs, isStopped, events, audioOwner) {
     fireEventsUpTo(t);
     if (t < durSec) requestAnimationFrame(tick);
     else {
-      // Animation ended — KEEP _bodyState in place. The next animation
-      // (or idle pose) reads applied/vel from where we left off so
-      // motion is continuous across boundaries with no separate ease-in
-      // pass needed.
+      // Animation ended — KEEP _bodyState.lastApplied in place. The
+      // next animation reads it when computing its initial offset so
+      // motion is continuous across boundaries. Any residual offset
+      // (uncommon — usually decays well before anim end) just shifts
+      // the starting point of the next transition, which the next
+      // anim's planner handles naturally.
       window.__activeAnimDofs = null;
     }
   };

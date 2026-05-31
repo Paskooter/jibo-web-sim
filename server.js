@@ -80,11 +80,17 @@ app.get(/webgl-texture-util\.js$/, (req, res, next) => {
 // resolved relative to the *playing skill's* assetPack root, so each
 // consuming skill needs the same redirect. Nimbus hit this first (M57);
 // @be/idle, @be/clock, @be/main-menu, @be/first-contact etc. all use the
-// same anim-db named animations and reproduce the same ENOENT. Match any
-// @be/<skill>/animations/textures/<file> and probe the anim-db copy.
-app.get(/\/@be\/[^/]+\/animations\/textures\/([^/?#]+)$/, (req, res, next) => {
-  const file = req.path.split('/').pop();
-  const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${file}`;
+// same anim-db named animations and reproduce the same ENOENT.
+//
+// Match any @be/<skill>/animations/textures/<subpath> and probe the
+// anim-db copy. The capture is greedy on the subpath because anim-db
+// textures are organized in subdirectories (e.g. jibojis/coin-flip/
+// coin-tails.png) — not just leaf filenames.
+app.get(/\/@be\/[^/]+\/animations\/textures\/(.+)$/, (req, res, next) => {
+  const m = /\/@be\/[^/]+\/animations\/textures\/(.+)$/.exec(req.path);
+  if (!m) { next(); return; }
+  const subpath = m[1];
+  const fallback = `/external-skills/jibo-be/node_modules/jibo-anim-db-animations/animations/textures/${subpath}`;
   // Probe disk to avoid an infinite loop if the fallback is also missing.
   try {
     const abs = normalize(join(EXTERNAL_SKILLS, fallback.slice('/external-skills/'.length)));
