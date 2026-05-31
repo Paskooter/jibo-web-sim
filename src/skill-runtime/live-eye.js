@@ -903,12 +903,29 @@ export function installExpressionStubs(jibo, requireFn) {
 // has auth disabled by default, so no webTokenSecret is needed here.
 export function connectCloud(requireFn) {
   const server = (typeof window !== 'undefined' && window.__JIBO_SERVER__) || '';
-  if (!server) return;
   try {
     const js = requireFn('@jibo/jetstream-client');
     // init lives on `.api` (what jibo-be's JetstreamPlugin uses); fall back to top-level.
     const api = (js && js.api && typeof js.api.init === 'function') ? js.api : js;
     if (!api || typeof api.init !== 'function') { console.warn('[cloud] jetstream-client has no init'); return; }
+
+    // Offline mode: no pegasus to connect to, but the jetstream-client's module-
+    // private `client` still needs `client.log` set, otherwise every voice-listen
+    // attempt (`client.log.warn('Disconnected, waiting for reconnect')` at
+    // jetstream-client.js:58) crashes with `Cannot read properties of undefined`.
+    // jibo-be's JetstreamPlugin DOES call api.init(...) on boot, but if jibo-log
+    // didn't resolve cleanly from inside the @jibo/jetstream-client bundle, the
+    // `new Log()` fallback at Client.init (jetstream-client.js:401) threw before
+    // this.log was assigned. Force-init with an explicit no-op log so the
+    // property is set regardless. Inside api.init's `if (client.initialized) return`,
+    // a second call is a no-op when jibo-be's init already succeeded.
+    if (!server) {
+      const noopLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {},
+                        createChild: () => noopLog };
+      try { Promise.resolve(api.init({ hostname: '127.0.0.1', port: 0 }, noopLog)).catch(() => {}); }
+      catch (_) { /* */ }
+      return;
+    }
 
     // Track the active MIM Listen request. When a skill (e.g. @be/friendly-tips
     // in its `wanna see more?` MIM) opens a Listen with non-launch rules, the
