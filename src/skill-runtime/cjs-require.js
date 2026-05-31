@@ -350,7 +350,7 @@ function makeHttpFs() {
     if (!m) return false;
     if (m.has(url)) return false;
     const prefix = url.endsWith('/') ? url : url + '/';
-    for (const entry of m) { if (entry.startsWith(prefix)) return true; }
+    for (const entry of m.keys()) { if (entry.startsWith(prefix)) return true; }
     return false;
   }
   function open(p, flags, mode, cb) {
@@ -442,7 +442,7 @@ function makeHttpFs() {
       const url = mapUrl(p);
       const prefix = url.endsWith('/') ? url : url + '/';
       const seen = new Set();
-      for (const entry of m) {
+      for (const entry of m.keys()) {
         if (!entry.startsWith(prefix)) continue;
         const name = entry.slice(prefix.length).split('/')[0];
         if (name) seen.add(name);
@@ -455,7 +455,7 @@ function makeHttpFs() {
       const url = mapUrl(p);
       const prefix = url.endsWith('/') ? url : url + '/';
       const seen = new Set();
-      for (const entry of m) {
+      for (const entry of m.keys()) {
         if (!entry.startsWith(prefix)) continue;
         const name = entry.slice(prefix.length).split('/')[0];
         if (name) seen.add(name);
