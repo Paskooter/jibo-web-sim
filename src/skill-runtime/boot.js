@@ -19,6 +19,25 @@ import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOff
 import { installServiceBus } from './services/index.js';
 import { installKbService } from './services/kb-service.js';
 import { localParse, KNOWN_PHRASES } from './local-nlu.js';
+import { createRegistry } from './nlu/index.js';
+
+// Rule-based NLU registry — loads the actual launch.rule files for the
+// on-robot @be/* skills (cloned from the be/ org's gitea repos and shipped
+// under assets/be-rules/). Used as PRIMARY local NLU when no pegasus server
+// is configured; falls back to the regex-based local-nlu.js for any input
+// the rules don't match. The order of loadSkill calls is the priority
+// order for first-match-wins.
+const _nluRegistry = createRegistry();
+const _nluReady = (async () => {
+  const skills = ['clock', 'main-menu', 'settings', 'greetings', 'who-am-i',
+                  'friendly-tips', 'gallery', 'create', 'circuit-saver',
+                  'idle', 'ifttt', 'chitchat'];
+  for (const s of skills) {
+    try { await _nluRegistry.loadSkill('@be/' + s, '/assets/be-rules/' + s + '/launch.rule'); }
+    catch (e) { console.warn('[nlu] skill load failed:', s, e.message); }
+  }
+  console.log('[nlu] registry loaded', _nluRegistry._skills.length, 'skill rule(s)');
+})();
 
 const params = new URLSearchParams(location.search);
 const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
@@ -188,31 +207,39 @@ async function bootReal() {
       if (!js || typeof js.startLocalTurn !== 'function') return;
 
       // No-pegasus fallback: when the host has no backend server configured,
-      // the cloud path can't reach an IntentRouter. Run a local regex-based
-      // parser (src/skill-runtime/local-nlu.js) and emit the result through
-      // the same jetstream events GlobalManagerService listens on. Only
-      // ON-ROBOT @be/* skills work this way — cloud-skill intents (chitchat
-      // dances, news) require a real SKILL_ACTION mim graph from the cloud
+      // the cloud path can't reach an IntentRouter. Run NLU locally.
+      // PRIMARY path: the rule-based registry (src/skill-runtime/nlu/) which
+      // matches against the actual jibo-nlu .rule files we ship under
+      // assets/be-rules/ — same DSL the cloud's IntentRouter compiles, just
+      // walked by a JS interpreter.
+      // FALLBACK path: the regex matcher (local-nlu.js) for cases the rules
+      // don't cover.
+      // Only ON-ROBOT @be/* skills work this way — cloud-skill intents
+      // (chitchat dances, news) need the cloud's SKILL_ACTION mim graph
       // and are silently dropped (with a log hint).
       if (!window.__JIBO_SERVER__) {
-        const result = localParse(text);
-        if (!result) {
-          console.log('[local-nlu] no match for', JSON.stringify(text), '— try one of:', KNOWN_PHRASES.slice(0, 6).join(' / '), '...');
-          return;
-        }
-        console.log('[local-nlu] matched', JSON.stringify(text), '->', result.match.skillID, '(' + result.nlu.intent + ')');
-        try {
-          if (js.events && js.events.localTurnResult && typeof js.events.localTurnResult.emit === 'function') {
-            js.events.localTurnResult.emit({ status: 'SUCCEEDED', result });
-          } else {
-            // Fallback: directly emit skillRelaunch if jetstream events
-            // aren't wired (older code path).
-            const ge = window.jibo && window.jibo.globalEvents;
-            if (ge && ge.skillRelaunch && typeof ge.skillRelaunch.emit === 'function') {
-              ge.skillRelaunch.emit(result);
-            }
+        (async () => {
+          await _nluReady;
+          let result = null;
+          try { result = _nluRegistry.parse(text); } catch (e) { console.warn('[nlu] parse error:', e.message); }
+          const source = result ? 'rule' : 'regex';
+          if (!result) result = localParse(text);
+          if (!result) {
+            console.log('[nlu] no match for', JSON.stringify(text), '— try one of:', KNOWN_PHRASES.slice(0, 6).join(' / '), '...');
+            return;
           }
-        } catch (e) { console.warn('[local-nlu] emit failed:', (e && e.message) || e); }
+          console.log('[nlu/' + source + '] matched', JSON.stringify(text), '->', result.match.skillID, '(' + result.nlu.intent + ')');
+          try {
+            if (js.events && js.events.localTurnResult && typeof js.events.localTurnResult.emit === 'function') {
+              js.events.localTurnResult.emit({ status: 'SUCCEEDED', result });
+            } else {
+              const ge = window.jibo && window.jibo.globalEvents;
+              if (ge && ge.skillRelaunch && typeof ge.skillRelaunch.emit === 'function') {
+                ge.skillRelaunch.emit(result);
+              }
+            }
+          } catch (e) { console.warn('[nlu] emit failed:', (e && e.message) || e); }
+        })();
         return;
       }
 

@@ -1,0 +1,92 @@
+TopRule =
+($*
+    (
+        ($D_GALLERY)
+           {intent = D_GALLERY._intent}
+           {itemType = D_GALLERY._itemType}
+    )
+
+$*) {skill='\@be/gallery'}{domain = 'gallery'}
+;
+
+### GALLERY DOMAIN
+
+D_GALLERY =
+(
+    ($D_GALLERY_GENERAL) {_itemType = 'all'} |
+    ($D_GALLERY_SPECIFIC) {_itemType = D_GALLERY_SPECIFIC._itemType} |
+    ($D_GALLERY_DELETE) {_itemType=D_GALLERY_DELETE._itemType}
+){_intent='galleryOpen'}
+;
+
+
+D_GALLERY_GENERAL =
+(
+    (?$D_GALLERY_V_SHOW ?((what ?is)|what\'s ?in) $* $D_GALLERY_V_GALLERY) |
+    (?$D_GALLERY_V_WANT $D_GALLERY_V_SEE $* $D_GALLERY_V_GALLERY) |
+    ($D_GALLERY_V_RUN $* $D_GALLERY_V_GALLERY) |
+    ($D_GALLERY_V_IS_THERE|$D_GALLERY_V_SHOW $* $D_GALLERY_V_ANYTHING) |
+    ($D_GALLERY_V_ANYTHING new)
+)
+;
+
+D_GALLERY_SPECIFIC =
+(
+    (?$D_GALLERY_V_WANT $* $D_GALLERY_V_SHOW $* $D_GALLERY_ITEM) |
+    (?$D_GALLERY_V_WANT $D_GALLERY_V_SEE $* $D_GALLERY_ITEM) |
+    ($D_GALLERY_V_IS_THERE ?$D_GALLERY_V_ANY $* $D_GALLERY_ITEM)
+)   {_itemType = D_GALLERY_ITEM._itemType}
+|
+(
+    (?any ?new $D_GALLERY_ITEM_PLURAL)
+)   {_itemType = D_GALLERY_ITEM_PLURAL._itemType}
+;
+
+
+D_GALLERY_DELETE =
+(
+    ?$D_GALLERY_V_WANT $D_GALLERY_V_DELETE $* $D_GALLERY_ITEM
+){_itemType=D_GALLERY_ITEM._itemType}
+;
+
+
+D_GALLERY_ITEM =
+(
+    ($D_GALLERY_V_PICTURE) {_itemType='photo'} |
+    ($D_GALLERY_V_VIDEO) {_itemType='video'} |
+    ($D_GALLERY_V_AUDIO) {_itemType='audio'} |
+    ($D_GALLERY_V_PHOTOBOOTH) {_itemType='photobooth'}
+)
+;
+
+D_GALLERY_ITEM_PLURAL =
+(
+    ($D_GALLERY_V_PICTURES) {_itemType='photo'} |
+    ($D_GALLERY_V_VIDEOS) {_itemType='video'} |
+    ($D_GALLERY_V_AUDIOS) {_itemType='audio'} |
+    ($D_GALLERY_V_PHOTOBOOTHS) {_itemType='photobooth'}
+)
+;
+
+### USEFUL_VOCABULARY ###
+D_GALLERY_V_ANY = ($D_GALLERY_V_THE | any | some| all |my);
+D_GALLERY_V_ANYTHING = ((anything|something|everything ?new) |( ?$D_GALLERY_V_ANY ?new $D_GALLERY_V_STUFF));
+D_GALLERY_V_DELETE = (discard | delete | erase |(get $w03 rid) | trash | toss | (throw ($* (out | away))));
+D_GALLERY_V_THE = (a|an|the|that|those|your);
+D_GALLERY_V_GALLERY = (gallery|album);
+D_GALLERY_V_SHOW = (show ?(me|us))|play|(?(let (me|us)) see)|(bring|pull|put|throw ?up)|display|open|browse|(scroll through)|find|view|present|(go to)|load|((bring|take) (me|us) to);
+D_GALLERY_V_RUN = (do|launch|run|start|access);
+D_GALLERY_V_IS_THERE = ((is|are there)|got|(?(do (you|i)) have));
+D_GALLERY_V_WANT = ((i|we want ?to)|(i\'d|we\'d|(i|we would) like ?to)|([let?(\')s]));
+D_GALLERY_V_SEE = (see|watch|(look ?at)|view|examine|(scroll|flip through));
+D_GALLERY_V_STUFF = (stuff|media|[creation?s]|[post?s]);
+D_GALLERY_V_PICTURE = ([picture?s] | [photo?s] | [pic?s] | [photograph?s] | [selfie?s]);
+D_GALLERY_V_PICTURES = (pictures|photos|pics|photographs|selfies);
+D_GALLERY_V_VIDEO = ([video?s] | [movie?s] | [film?s] | [flick?s]);
+D_GALLERY_V_VIDEOS = (videos|movies|films|flicks);
+D_GALLERY_V_PHOTOBOOTH = [photobooth?s] | [photoshoot?s] | (photo ([shoot?s]|[booth?s]|[collage?s]|[set?s]|[group?s]));
+D_GALLERY_V_PHOTOBOOTHS = (photobooths|photoshoots|(photo booths|shoots|collages|sets|groups));
+D_GALLERY_V_AUDIO = (([voice?s]|[sound?s] [message?s]|[file?s])|
+    [audio?s]|[message?s]|[note?s]);
+D_GALLERY_V_AUDIOS = (([voice?s]|[sound?s] messages|files)|
+    messages|notes);

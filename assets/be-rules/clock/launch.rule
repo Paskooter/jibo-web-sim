@@ -1,0 +1,473 @@
+TopRule =
+            ($* ?$KU_PREFIXES $D_TIME {domain='clock'}
+                   {intent=D_TIME._intent}
+                   {country=D_TIME._country}
+                   {state=D_TIME._state}
+                   {city=D_TIME._city}
+                   {day_of_week = D_TIME._day_of_week}
+                   {skill='\@be/clock'} $*) |
+            ($D_TIME_ISOLATED {domain='clock'}
+                   {intent=D_TIME_ISOLATED._intent}
+                   {country=D_TIME_ISOLATED._country}
+                   {state=D_TIME_ISOLATED._state}
+                   {city=D_TIME_ISOLATED._city}
+                   {day_of_week = D_TIME_ISOLATED._day_of_week}
+                   {skill='\@be/clock'}) |
+            ($* ?$KU_PREFIXES $D_TIMER{domain='timer'}
+                    {intent=D_TIMER._intent}
+                    {hours=D_TIMER._hours}
+                    {minutes=D_TIMER._minutes}
+                    {seconds=D_TIMER._seconds}
+                    {skill='\@be/clock'} $*) |
+            ($* ?$KU_PREFIXES $D_ALARM  {domain = 'alarm'}
+                    {intent = D_ALARM._intent}
+                    {time = D_ALARM._time}
+                    {ampm = D_ALARM._ampm}
+                    {skill = '\@be/clock'} $*) |
+            ($* ?$KU_PREFIXES $D_TIME_WHEN_BDAY {domain = 'clock'}
+                    {intent=D_TIME_WHEN_BDAY._intent}
+                    {loopmember=D_TIME_WHEN_BDAY._loopmember}
+                    {skill = '\@be/clock'} $*) |
+            ($* ?$KU_PREFIXES $D_TIME_WHEN_HOLIDAY {domain = 'clock'}
+                    {intent=D_TIME_WHEN_HOLIDAY._intent}
+                    {holiday=D_TIME_WHEN_HOLIDAY._holiday}
+                    {skill = '\@be/clock'} $*)
+;
+
+### TIME DOMAIN ###
+D_TIME = (
+            ( $D_TIME_INTENT_WITH_LOCATION {_intent = D_TIME_INTENT_WITH_LOCATION._intent}
+                                           {_country='null'}
+                                           {_state='null'}
+                                           {_city='null'}
+                                           {_day_of_week = 'null'}
+                   ?($* $D_TIME_LOCATION {_country=D_TIME_LOCATION._country}
+                                        {_state=D_TIME_LOCATION._state}
+                                        {_city=D_TIME_LOCATION._city})
+            ) |
+            ( $D_TIME_INTENT_WITHOUT_LOCATION {_intent = D_TIME_INTENT_WITHOUT_LOCATION._intent}
+                                              {_day_of_week = D_TIME_INTENT_WITHOUT_LOCATION._day_of_week}
+                                              {_country='null'}
+                                              {_state='null'}
+                                              {_city='null'}
+            ) |
+            (
+              $D_TIME_INTENT_MENU {_intent='menu'}
+                                  {_country='null'}
+                                  {_state='null'}
+                                  {_city='null'}
+                                  {_day_of_week='null'}
+            )
+         )
+;
+
+
+D_TIME_ISOLATED = (
+            time    {_intent = 'askForTime'}
+                    {_country='null'}
+                    {_state='null'}
+                    {_city='null'}
+                    {_day_of_week = 'null'}
+                ?($w03 $D_TIME_LOCATION
+                    {_country=D_TIME_LOCATION._country}
+                    {_state=D_TIME_LOCATION._state}
+                    {_city=D_TIME_LOCATION._city})
+    )
+;
+
+### LOCATION FACTORY SLOTS ###
+D_TIME_LOCATION =
+    $D_TIME_USCITYSTATE {_country=D_TIME_USCITYSTATE._country}
+                        {_state=D_TIME_USCITYSTATE._state}
+                        {_city=D_TIME_USCITYSTATE._city} |
+    $D_TIME_USSTATE {_country=D_TIME_USSTATE._country}
+                    {_state=D_TIME_USSTATE._state}
+                    {_city=D_TIME_USSTATE._city} |
+    $D_TIME_CANADA_CITYPROVINCE {_country=D_TIME_CANADA_CITYPROVINCE._country}
+                            {_state=D_TIME_CANADA_CITYPROVINCE._state}
+                            {_city=D_TIME_CANADA_CITYPROVINCE._city} |
+    $D_TIME_CANADA_PROVINCE {_country=D_TIME_CANADA_PROVINCE._country}
+                            {_state=D_TIME_CANADA_PROVINCE._state}
+                            {_city=D_TIME_CANADA_PROVINCE._city} |
+    $D_TIME_COUNTRY {_country=D_TIME_COUNTRY._country}
+                    {_state=D_TIME_COUNTRY._state}
+                    {_city=D_TIME_COUNTRY._city} |
+    $D_TIME_WORLDCITY {_country=D_TIME_WORLDCITY._country}
+                      {_state=D_TIME_WORLDCITY._state}
+                      {_city=D_TIME_WORLDCITY._city}
+;
+
+
+D_TIME_USCITYSTATE = $factory:city_state {_country='null'}{_state = city_state._state}{_city = city_state._city}
+              ?($* $D_TIME_USA){_country='usa'}
+;
+
+D_TIME_USSTATE = $factory:state {_country='null'}{_state=state._nl}{_city='null'}
+          ?($* $D_TIME_USA){_country='usa'}
+;
+
+D_TIME_CANADA_CITYPROVINCE = $factory:canada_city_province {_country='null'} {_state=canada_city_province._province} {_city=canada_city_province._city}
+            ?($* canada {_country='canada'})
+;
+
+D_TIME_CANADA_PROVINCE = $factory:canada_province {_country='null'} {_state=canada_province._nl} {_city='null'}
+            ?($* canada {_country='canada'})
+;
+
+D_TIME_COUNTRY = ?(in ?the country|(independent state) ?of) $factory:country {_country=country._country}{_state='null'}{_city='null'} ?(the country|(independent state))
+;
+
+D_TIME_WORLDCITY =
+(
+        (
+            $factory:world_city_country
+                {_country=world_city_country._country}
+                {_state='null'}
+                {_city=world_city_country._city}
+        )
+        |
+        (
+            $factory:world_city_country
+                {_city=world_city_country._city}
+                {_state='null'}
+            $* ?(in the country|(independent state) ?of)
+            $factory:country {_country=country._country}
+            ?(the country|(independent state))
+            ~5
+        )
+)
+;
+
+D_TIME_WHEN_BDAY = ( $D_TIME_V_WHEN|(do you know when) $LOOPMEMBER birthday {_intent='whenIsBirthday'} {_loopmember=LOOPMEMBER._loopmember});
+
+D_TIME_WHEN_HOLIDAY = (($D_TIME_V_WHEN $HOLIDAY)|(when does|will $HOLIDAY begin|start)) {_intent='whenIsHoliday'}{_holiday=HOLIDAY._holiday};
+
+### INTENTS ###
+D_TIME_INTENT_WITH_LOCATION = (
+        $D_TIME_ASK_FOR_TIME{_intent = 'askForTime'} |
+        $D_TIME_ASK_FOR_DATE{_intent = 'askForDate'} |
+        ($D_TIME_ASK_FOR_DAY ~5 {_intent = 'askForDate'})
+)
+;
+
+D_TIME_INTENT_WITHOUT_LOCATION = (
+        $D_TIME_ASK_FOR_DAY{_intent = 'askForDay'}{_day_of_week='null'} |
+        $D_TIME_ASK_FOR_SPECIFIC_DAY_OF_WEEK{_intent = 'askForDay'}{_day_of_week = D_TIME_ASK_FOR_SPECIFIC_DAY_OF_WEEK._day_of_week}
+)
+;
+
+D_TIME_INTENT_MENU = (
+        ?($D_TIME_V_OPEN ?$D_TIME_V_THE) clock ?$D_TIME_V_MENU
+)
+;
+
+### CONTENTS OF INTENTS ###
+D_TIME_ASK_FOR_TIME = ($D_TIME_V_WHAT|$D_TIME_V_TELL_USER|(?$V_CANYOU get|give|access)|(do you have)|[when?(\'s)]  $* $D_TIME_V_TIME ?($* $D_TIME_V_ISIT ($* ?$D_TIME_V_NOW)) )|(current time);
+D_TIME_ASK_FOR_DATE = ?($D_TIME_V_WHAT|$D_TIME_V_TELL_USER  $* ?($D_TIME_V_TODAY $*) ) $D_TIME_V_DATE ?($* $D_TIME_V_ISIT ($* ?$D_TIME_V_TODAY) );
+D_TIME_ASK_FOR_DAY  = ?($D_TIME_V_WHAT|$D_TIME_V_TELL_USER  $w03 ?($D_TIME_V_TODAY $*) ) $D_TIME_V_DAY ?$D_TIME_V_OF_WEEK ?($* $D_TIME_V_ISIT ($* ?$D_TIME_V_TODAY) );
+D_TIME_ASK_FOR_SPECIFIC_DAY_OF_WEEK  = $D_TIME_V_ISIT $w03 ?($D_TIME_V_TODAY $*)  $D_TIME_V_SPECIFIC_DAY_OF_WEEK{_day_of_week = D_TIME_V_SPECIFIC_DAY_OF_WEEK._day_of_week} ($* ?$D_TIME_V_TODAY);
+
+
+
+### USEFUL VOCABULARY ###
+D_TIME_V_WHAT = what|(what is)|(what\'s);
+D_TIME_V_WHEN = ( (when ?is) | (when\'s)| (what day is) | (when will it be) | ((when\'s)|(when is) it (going to)|gonna be) | (is it) | (how long until)|(when will)|((what is)|(what\'s) the date of)|(which day is)|(is today)|(when are));
+D_TIME_V_TELL_USER = ((tell ?(me|us))|((let me|us)|(i|we want|(would like) ?to)|$V_CANWE know|see)|(i|we wish i|we ?could [kn(e|o)w]|see)|$D_TIME_V_OPEN);
+D_TIME_V_TIME = time|timing;
+D_TIME_V_ISIT = (is ?it)|(it is)|(it\'s);
+D_TIME_V_TODAY = (today|today\'s);
+D_TIME_V_DAY = day|day\'s;
+D_TIME_V_DATE = date|date\'s;
+D_TIME_V_OF_WEEK = (of $* week);
+D_TIME_USA = (united states ?(?of america)) | (u s a)| (u. s. a.) | (usa);
+D_TIME_V_OPEN = (open | (go to) | (show ?(me|us)) | (bring up) | ((bring|take) (me|us) to) | load | access | display | (let (me|us) see)) ;
+D_TIME_V_MENU = (menu | options | list | app) ;
+D_TIME_V_NOW = (?right now);
+D_TIME_V_THE = (the|that|your);
+D_TIME_V_STARTOF = (?the start|beginning|(first day|night) of);
+D_TIME_V_ENDOF = (?the (last|final day|night)|end of);
+
+D_TIME_V_SPECIFIC_DAY_OF_WEEK =
+    monday {_day_of_week = 'monday'} |
+    tuesday {_day_of_week = 'tuesday'}|
+    wednesday {_day_of_week = 'wednesday'} |
+    thursday {_day_of_week = 'thursday'} |
+    friday {_day_of_week = 'friday'} |
+    saturday {_day_of_week = 'saturday'} |
+    sunday {_day_of_week = 'sunday'}
+;
+
+HOLIDAY =
+    (
+       (christmas) {_holiday='christmas'} |
+       ((christmas eve)|(?the night before christmas)) {_holiday='christmasEve'} |
+       (thanksgiving) {_holiday='thanksgiving'} |
+       (memorial day) {_holiday='memorial'} |
+	   (( ?([america?(n|(\'s))]|(u.s.)|(united states)) independence day)|(july 4|4th|four|fourth)|(?the 4|4th|four|fourth of july)) {_holiday='julyFourth'} |
+       (easter ?(sunday|weekend)){_holiday='easter'} |
+       (good friday) {_holiday='goodFriday'} |
+       (ash wednesday) {_holiday='ashWednesday'} |
+       (palm sunday) {_holiday='palmSunday'} |
+       ( ?($D_TIME_V_STARTOF) hanukkah|chanukah) {_holiday='hanukkah'} |
+       (sukkot|sukkoth|cicott|succoth) {_holiday='sukkot'} |
+       ( ?($D_TIME_V_STARTOF) passover) {_holiday='passover'} |
+       (rosh hashanah) {_holiday='roshHashanah'} |
+       (yom kippur) {_holiday='yomKippur'} |
+       (purim|primm|coram|corium|parenham ) {_holiday='purim'} |
+       (labor day) {_holiday='labor'} |
+       ( halloween|(all [hallow?(\')s] eve) ){_holiday='halloween'} |
+       ( ?(saint|st.) [valentine?(?(\')s)] ?day ) {_holiday='valintines'} |
+       ((saint|st.) [patrick?(?(\')s)]|[paddy?(?(\'s))] ?day ) {_holiday='saintPatricks'} |
+       (?($D_TIME_V_STARTOF) ramadan ) {_holiday='ramadan'} |
+       ((eid ?(al fitr))|(eid-al-fitr)|($D_TIME_V_ENDOF ramadan)) {_holiday='eid'} |
+       ( ?($D_TIME_V_STARTOF) kwanzaa) {_holiday='kwanzaa'} |
+       ([president?(\')s?(\')] day ) {_holiday='presidents'} |
+       ((mlk | (martin luther king ?(junior|jr.))) day ) {_holiday='mlk'} |
+       (new [year?(\')s] eve) {_holiday='newYearsEve'} |
+	   (new [year?(\')s] ?day) {_holiday='newYearsDay'} |
+       (chinese new [year?(?(\')s)]) {_holiday='chineseNewYear'} |
+       (cinco de mayo) {_holiday='cincoDeMayo'} |
+       ([mother?(\')s?(\')] day) {_holiday='mothers'} |
+       ([father?(\')s?(\')] day) {_holiday='fathers'} |
+       (april [fool?(\')s?(\')] ?day) {_holiday='aprilFools'} |
+       ((tax day)|(taxes due)|(the last day $* taxes)) {_holiday='tax'} |
+       (flag day) {_holiday='flag'} |
+       ([groundhog?(?(\')s?(\'))] day) {_holiday='groundhog'} |
+       ([veteran?(?(\')s?(\'))] day) {_holiday='veterans'}
+    )
+;
+
+LOOPMEMBER = $handle:crew{_loopmember = crew._users};
+
+
+
+### TIMER DOMAIN: ###
+D_TIMER =
+(
+        (
+            $D_TIMER_SET
+                    {_intent  = 'start'}
+                    {_hours   = 'null'}
+                    {_minutes = 'null'}
+                    {_seconds = 'null'}
+            ?(
+                ?for $w03 $D_TIMER_TIMER_VALUE
+                    {_hours   = D_TIMER_TIMER_VALUE._hours}
+                    {_minutes = D_TIMER_TIMER_VALUE._minutes}
+                    {_seconds = D_TIMER_TIMER_VALUE._seconds}
+            )
+        )
+        |
+        (
+            $D_TIMER_SET_VALUE_REQ
+                    {_intent  = D_TIMER_SET_VALUE_REQ._intent}
+                    {_hours   = D_TIMER_SET_VALUE_REQ._hours}
+                    {_minutes = D_TIMER_SET_VALUE_REQ._minutes}
+                    {_seconds = D_TIMER_SET_VALUE_REQ._seconds}
+        )
+        |
+        (
+            $D_TIMER_TIMER_VALUE $* $D_TIMER_V_TIMER
+                    {_intent  = 'start'}
+                    {_hours   = D_TIMER_TIMER_VALUE._hours}
+                    {_minutes = D_TIMER_TIMER_VALUE._minutes}
+                    {_seconds = D_TIMER_TIMER_VALUE._seconds}
+        ) |
+        (
+            $D_TIMER_INTENT_WITHOUT_TIMER_VALUE
+                    {_intent  = D_TIMER_INTENT_WITHOUT_TIMER_VALUE._intent}
+                    {_hours   = 'null'}
+                    {_minutes = 'null'}
+                    {_seconds = 'null'}
+        )
+);
+
+D_TIMER_SET_VALUE_REQ =
+(
+    (give me $D_TIMER_TIMER_VALUE) |
+    ($D_TIMER_V_TELL_USER when $D_TIMER_TIMER_VALUE (has|have passed|(gone by))|(is|are up))
+){_intent='start'}
+{_hours   = D_TIMER_TIMER_VALUE._hours}
+{_minutes = D_TIMER_TIMER_VALUE._minutes}
+{_seconds = D_TIMER_TIMER_VALUE._seconds}
+;
+
+
+
+D_TIMER_INTENT_WITHOUT_TIMER_VALUE =
+(
+            $D_TIMER_STOP{_intent = 'stop'} |
+            $D_TIMER_RESTART {_intent = 'restart'} |
+            $D_TIMER_QUERY {_intent = 'query'}
+);
+
+D_TIMER_SET = ?($D_TIMER_V_SET $* ) $D_TIMER_V_TIMER;
+D_TIMER_STOP = $D_TIMER_V_STOP $* $D_TIMER_V_TIMER;
+D_TIMER_RESTART = ($D_TIMER_V_RESTART $* $D_TIMER_V_TIMER) | ($D_TIMER_V_SET $* $D_TIMER_V_TIMER $* $D_TIMER_V_AGAIN) | ( ?(make|force) $* $D_TIMER_V_TIMER $* $D_TIMER_V_RESTART);
+D_TIMER_QUERY = (
+    ($D_TIMER_V_SHOW $* $D_TIMER_V_TIMER) |
+    ($D_TIMER_V_HOW_MUCH $* $D_TIMER_V_TIME $* $D_TIMER_V_TIMER) |
+    ($D_TIMER_V_WHATS_LEFT $* $D_TIMER_V_TIMER) |
+    ($D_TIMER_V_WHAT $* $D_TIMER_V_TIMER) |
+    (when|(how long|(much ?time)) $* $D_TIMER_V_TIMER ?($* $D_TIMER_V_RING)) |
+    ($D_TIMER_V_ARE_THERE ?already ?(a|an|any) [timer?s] ?set ?already)
+);
+
+D_TIMER_TIMER_VALUE = (
+    (
+            $factory:timer ?(from now)
+    ) {_hours=timer._hours}{_minutes=timer._minutes}{_seconds=timer._seconds}
+    |
+    (
+        $* ?$factory:timer $* $D_TIMER_V_INVALID_TIMESCALE $* ?$factory:timer $* ~0.1
+    ){_hours='25'}{_minutes='null'}{_seconds='null'}
+    |
+    (
+        one|1 [day?s]
+    ){_hours='24'}{_minutes='null'}{_seconds='null'}
+);
+
+
+### USEFUL VOCABULARY ###
+D_TIMER_V_SET = start|set|begin;
+D_TIMER_V_TIMER = [timer?s];
+D_TIMER_V_STOP = [stop?(ing)]|[kil?l?(ing)]|[end?(ing)]|[quit?(ting)]|
+    [cancel?(ing)]|[terminat(e|(ing))]|[remov(e|(ing))]|[delet(e|(ing))]|
+    [eliminat(e|(ing))]|[discard?(ing)];
+D_TIMER_V_ALL = all ?(?of my|the);
+D_TIMER_V_EVERY = every ?(?of my|the);
+D_TIMER_V_TIMERS = timers;
+D_TIMER_V_RESTART = restart|reset|(start over)|(start again);
+D_TIMER_V_AGAIN = again|(one more time)|(once more)|over;
+D_TIMER_V_DONE = done|[finish?((es)|(ed))]|[end?(s|(ed))]|[complete?(s|d)];
+D_TIMER_V_SHOW = query|(show ?me)|display|(bring|pull|put|throw ?up)|(?(let me) see)|open|browse|view|present|load|(tell me);
+D_TIMER_V_HOW_MUCH = (how much)|(how many);
+D_TIMER_V_TIME = time|[minute?s]|[second?s]|[hour?s];
+D_TIMER_V_WHATS_LEFT = $D_TIMER_V_WHAT $* $D_TIMER_V_LEFT;
+D_TIMER_V_WHAT = what|what\'s|(what is);
+D_TIMER_V_LEFT = left|[remain?s]|remaining;
+D_TIMER_V_RING = ring|activate|activating|ringing|activated|rang|(go off);
+D_TIMER_V_ADD = add|increase;
+D_TIMER_V_TO_THE = to ?(my|the|thy|our|your);
+D_TIMER_V_TELL_USER = (tell me|us)|(let me|us know);
+D_TIMER_V_ARE_THERE = ((do i|we|you have)|(is|are there)|(got any));
+D_TIMER_V_INVALID_TIMESCALE = ([day?s]|[week?s]|[weekend?s]|[fortnight?s]|[month?s]|[season?s]|[semester?s]|[year?s]|[olympiad?s]|[lustrum?s]|[decade?s]);
+
+
+###### D_ALARM
+
+D_ALARM =
+(
+        $D_ALARM_QUERY {_intent='query'}{_time='null'}{_ampm='null'}
+        |
+        (
+            $D_ALARM_INTENTS_WITH_TIME {_time='null'}{_ampm='null'}
+                ?($* $D_ALARM_TIME_VALUE{_time=D_ALARM_TIME_VALUE._time}{_ampm=D_ALARM_TIME_VALUE._ampm})
+        ){_intent=D_ALARM_INTENTS_WITH_TIME._intent}
+        |
+        (
+            ?($D_ALARM_V_SET $*) $D_ALARM_TIME_VALUE $* $D_ALARM_V_ALARM
+        ){_intent='set'}{_time=D_ALARM_TIME_VALUE._time}{_ampm=D_ALARM_TIME_VALUE._ampm}
+        |
+        (
+            $D_ALARM_V_DELETE $* $D_ALARM_TIME_VALUE $* $D_ALARM_V_ALARM
+        ){_intent='delete'}{_time=D_ALARM_TIME_VALUE._time}{_ampm=D_ALARM_TIME_VALUE._ampm}
+)
+;
+
+
+D_ALARM_INTENTS_WITH_TIME =
+(
+        $D_ALARM_DELETE{_intent='delete'} |
+        $D_ALARM_SET{_intent='set'}
+);
+
+
+D_ALARM_SET =
+(
+    (?($D_ALARM_V_SET $*) $D_ALARM_V_ALARM|($D_TIMER_V_TIMER ~5)) |
+    ($D_ALARM_V_TELL_USER when $*)
+);
+
+D_ALARM_DELETE =
+(
+        (($D_ALARM_V_DELETE|$D_ALARM_V_SWITCH_OFF) $* $D_ALARM_V_ALARM) |
+        ($D_ALARM_V_SWITCH $* $D_ALARM_V_ALARM $* $D_ALARM_V_OFF)
+);
+
+D_ALARM_QUERY = (
+    ($D_ALARM_V_SHOW $* ?my $D_ALARM_V_ALARM) |
+    ($D_ALARM_V_WHEN|(how long|(much time)) $* $D_ALARM_V_ALARM ?($* $D_ALARM_V_RING)) |
+    ($D_ALARM_V_ARE_THERE ?(a|an|any) [alarm?s] ?set ?already) |
+    ($D_TIMER_V_WHAT $* $D_ALARM_V_ALARM)
+);
+
+D_ALARM_TIME_VALUE =
+(
+    (
+        $factory:time
+    ){_time = time._time_nl}{_ampm = time._time_ampm}
+    |
+    (
+        $* ?$factory:time $* $D_ALARM_V_INVALID_TIMESCALE $* ?$factory:time $* ~0.1
+    ){_time='25h0m0s'} {_ampm='null'}
+    |
+    (
+        1|one [day?s] ?(from now)
+    ){_time='24h0m0s'}{_ampm='null'}
+);
+
+
+### USEFUL VOCABULARY ###
+D_ALARM_V_SET = [start?(ing)]|[set?(ting)]|[begin?(ning)]|[configur(e|(ing))]|[creat(e|(ing))];
+D_ALARM_V_DELETE = [stop?(ing)]|[kil?l?(ing)]|[end?(ing)]|[quit?(ting)]|
+    [cancel?(ing)]|[terminat(e|(ing))]|[remov(e|(ing))]|[delet(e|(ing))]|
+    [eliminat(e|(ing))]|[discard?(ing)]|($D_ALARM_V_SWITCH_OFF);
+D_ALARM_V_ALL = all ?(?of my|the);
+D_ALARM_V_EVERY = every ?(?of my|the);
+D_ALARM_V_TIMERS = timers;
+D_ALARM_V_RESTART = restart|reset|(start over)|(start again);
+D_ALARM_V_AGAIN = again|(one more time)|(once more)|over;
+D_ALARM_V_SHOW = query|(show ?me)|display|(bring|pull|put|throw ?up)|(?(let me) see)|open|browse|view|present|load|(tell me);
+D_ALARM_V_HOW_MUCH = (how much)|(how many);
+D_ALARM_V_TIME = time|times|[minute?s]|[second?s]|[hour?s];
+D_ALARM_V_WHATS_LEFT = $D_ALARM_V_WHAT $* $D_ALARM_V_LEFT;
+D_ALARM_V_WHAT = what\'s|(what ?is);
+D_ALARM_V_WHEN = when|when\'s|($D_ALARM_V_WHAT $* $D_ALARM_V_TIME);
+D_ALARM_V_LEFT = left|[remain?s]|remaining;
+D_ALARM_V_ADD = add|increase;
+D_ALARM_V_TO_THE = to ?(my|the|thy|our|your);
+D_ALARM_V_ALARM = [alarm?s];
+D_ALARM_V_ALARMS = alarms;
+D_ALARM_V_SWITCH = switch|turn;
+D_ALARM_V_SWITCH_OFF = $D_ALARM_V_SWITCH $D_ALARM_V_OFF;
+D_ALARM_V_OFF = off;
+D_ALARM_V_RING = ring|activate|activating|ringing|activated|rang|(go off);
+D_ALARM_V_GO_OF = go|going $D_ALARM_V_OFF;
+D_ALARM_V_ISIT = (is ?it)|(it is)|(it\'s);
+D_ALARM_V_TODAY = (today|today\'s);
+D_ALARM_V_DAY = day|day\'s;
+D_ALARM_V_DATE = date|date\'s;
+D_ALARM_V_OF_WEEK = (of $* week);
+D_ALARM_V_SPECIFIC_DAY_OF_WEEK = monday|tuesday|wednesday|thursday|friday|saturday|sunday;
+D_ALARM_V_TELL_USER = (tell me|us)|(let me|us know);
+D_ALARM_V_ARE_THERE = ((do i|we|you have)|(is|are there)|(got any));
+D_ALARM_V_INVALID_TIMESCALE = ([day?s]|[week?s]|[weekend?s]|[fortnight?s]|[month?s]|[season?s]|[semester?s]|[year?s]|[olympiad?s]|[lustrum?s]|[decade?s]);
+
+KU_PREFIXES= (
+    (i (was ?$V_ACTUALLY saying|(trying to say))|(meant to say) $*) |
+    ($V_CANYOU ?$V_ACTUALLY ?(tell ?(me|us) ?about) $*) |
+    ($V_CANYOU ?$V_ACTUALLY access $*) |
+    ($V_CANYOU ?$V_ACTUALLY get ?(me|us) $*) |
+    ($V_CANYOU ?$V_ACTUALLY give ?(me|us) $*) |
+    (do you ?$V_ACTUALLY have $*) |
+    ((i ?$V_ACTUALLY want)|(i\'d|(i would) ?$V_ACTUALLY like) ?to $*) |
+    (i ?$V_ACTUALLY wish ?to $*) |
+    (i ?$V_ACTUALLY wish you $*) |
+    ($V_CANWE|(let me|us) see $*)
+~0.1);
+
+
+V_ACTUALLY = <1.0>(really|actually|usually|ever)<0.0>;
+V_CANYOU = ((can you)|(do you ?(?$V_ACTUALLY know how ?to))|(are you ?$V_ACTUALLY able|capable|allowed|permitted ?(to|of)));
+V_CANWE = ((can|may|could i|we|people)|((are we)|(am i) ?$V_ACTUALLY allowed|able|permitted|capable ?(to|of)));

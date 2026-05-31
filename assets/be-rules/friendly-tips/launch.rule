@@ -1,0 +1,51 @@
+TopRule = ($* $D_FT_INTENTS $* {intent=D_FT_INTENTS._intent}{skill='\@be/friendly-tips'}{domain='friendly-tips'});
+
+D_FT_INTENTS = (
+    $D_FT_INTENT_FRUSTRATED {_intent='frustrated'} |
+    $D_FT_INTENT_CURIOUS {_intent='whatCanIDo'}
+);
+
+D_FT_INTENT_FRUSTRATED =
+(
+    (you\'re|(you ?are)|((why are)|(why\'re) you) ?such ?(a|an) $w03 ?$D_FT_V_VERY $D_FT_V_USELESS ?robot) |
+    (you can\'t|don\'t do nothing|shit|(anything ?(?$D_FT_V_VERY $D_FT_V_WORTHWHILE))) |
+    (you ?(seem ?to) have no $w03 ?$D_FT_V_VERY ?$D_FT_V_WORTHWHILE $D_FT_V_PURPOSE) |
+    (you don\'t|can\'t|((don\'t seem ?to ?be)|aren\'t ?($w03 (able ?to)|(capable ?of))) [do?(ing)] $w03 anything ?(?$D_FT_V_VERY $D_FT_V_WORTHWHILE)) |
+    (can|do|(why $w03 can\'t|don\'t) you ?(actually|really) $w03 do|accomplish anything ?(?$D_FT_V_VERY $D_FT_V_WORTHWHILE)) |
+    (you|(your $D_FT_V_PURPOSE) ?(is|are) ?$D_FT_V_VERY $D_FT_V_RESTRICTED) |
+    (your functionality|[capabilit(y|(ies))] ?(is|are) $w03 ?$D_FT_V_VERY $D_FT_V_USELESS|$D_FT_V_BAD) |
+    (you have no $w03 ?(real|actual) $D_FT_V_PURPOSE) |
+    (why $w03 would [any((one)|(body))] want ?(?to $D_FT_V_BUY) $D_FT_V_JIBO) |
+    (there\'s no point|reason ?to $D_FT_V_BUY $D_FT_V_JIBO)
+);
+
+D_FT_INTENT_CURIOUS =
+(
+    (what $D_FT_V_FEATURES do you have) |
+    (is there anything you can do) |
+    ((what ?is)|what\'s ?the point|purpose|use ?of ?$D_FT_V_BUY $D_FT_V_JIBO) |
+    ((what are)|(give me|us)|$D_FT_V_EXPLAIN $w03 reasons $D_FT_V_PEOPLE ?(might|should|would) want|(?(want|like|choose) ?to $D_FT_V_BUY) $D_FT_V_JIBO) |
+    ($D_FT_V_EXPLAIN $w03 ?your $D_FT_V_FEATURES|$D_FT_V_PURPOSE ?(you have))
+);
+
+
+###USEFUL VOCABULARY###
+D_FT_V_BAD = (bad|terrible|[suck?s]|[stink?s]|unacceptable|dreadful);
+D_FT_V_BUY = ([buy?(ing)]|[hav(e|(ing))]|[purchas(e|(ing))]|[get?(ting)]|[own?(ing)]);
+D_FT_V_EXPLAIN = (list|explain|(tell me|us ?about));
+D_FT_V_FEATURES = (features|skills|abilities|apps);
+D_FT_V_JIBO = ((?(one ?of) you)|(?a [jibo?s])|(?a social robot));
+D_FT_V_PEOPLE = (people|[some((one)|(body))]|[any((one)|(body))]|[every((one|(body)))]);
+D_FT_V_PURPOSE = (purpose|[use?s]|utility|functionality|[capabilit(y|(ies))]);
+D_FT_V_RESTRICTED = (limited|restricted|constrained|narrow|inadequate|insufficient|minimal|poor|subpar|pathetic);
+D_FT_V_USELESS =
+(
+	worthless|garbage|(non functional)|ineffective|pointless|purposeless|
+	unfunctional|unusable|unworkable|valueless|terrible|useless|(no good)|
+	(good for nothing)|(?a waste ?of space)|(of no use)|shitty|cheap|shoddy|
+	junk|sub-par|crummy|[crap?(py)]|pathetic|feckless|dysfunctional|needless|
+	unimportant|unnecessary|deficient|inadequate|impractical|lame|substandard|
+    disappointing|nonviable|unworkable|(piece ?of crap|shit)
+);
+D_FT_V_VERY = (very|really|pretty|extremely|actually|incredibly|so|such);
+D_FT_V_WORTHWHILE = (worthwhile|useful|productive|good|practical|helpful|beneficial|constructive|valuable|effective);

@@ -1,0 +1,8 @@
+TopRule =
+(
+    $w02  trigger|triggered|abracadabra $PARSED
+){slotAction=PARSED._slotAction}{skill='\@be/ifttt'}{domain = 'ifttt'}
+;
+
+PARSED @= (+$w){_slotAction=_parsed};
+w02 = <1.0> ?($w | ($w $w)) <0.0>;

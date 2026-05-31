@@ -1,0 +1,3 @@
+TopRule = ($* ?$GO_TO $* main menu {skill='\@be/main-menu'} $*);
+
+GO_TO = (open | (go ?back to) | (return to) | (bring up) | (bring|take (me | us) to) | load | access | view | display| ( show ?(me | us)) | (let me|us see) | (let\'s see));

@@ -1,0 +1,170 @@
+TopRule =
+(
+    ($* $D_GREETINGS
+        {intent=D_GREETINGS._intent} $*) |
+    ($* $D_GREETINGS_WITH_SELFID
+        {selfid=D_GREETINGS_WITH_SELFID._selfid}
+        {intent=D_GREETINGS_WITH_SELFID._intent}
+        {inLoop=D_GREETINGS_WITH_SELFID._inLoop} $*) |
+    ($* $D_GREETINGS_INTENT_STRICT
+        {intent=D_GREETINGS_INTENT_STRICT._intent})
+){domain='greetings'}{skill='\@be/greetings'}
+;
+
+### GREETINGS DOMAIN ###
+D_GREETINGS =
+    (
+      $D_GREETINGS_INTENT_HELLO {_intent=D_GREETINGS_INTENT_HELLO._intent} |
+      $D_GREETINGS_INTENT_WHATSUP {_intent=D_GREETINGS_INTENT_WHATSUP._intent} |
+      $D_GREETINGS_INTENT_HOWAREYOU {_intent=D_GREETINGS_INTENT_HOWAREYOU._intent} |
+      $D_GREETINGS_INTENT_GOODMORNING {_intent=D_GREETINGS_INTENT_GOODMORNING._intent} |
+      $D_GREETINGS_INTENT_GOODAFTERNOON {_intent=D_GREETINGS_INTENT_GOODAFTERNOON._intent} |
+      $D_GREETINGS_INTENT_GOODEVENING {_intent=D_GREETINGS_INTENT_GOODEVENING._intent} |
+      $D_GREETINGS_INTENT_GOODNIGHT {_intent=D_GREETINGS_INTENT_GOODNIGHT._intent} |
+      $D_GREETINGS_INTENT_GOODBYE {_intent=D_GREETINGS_INTENT_GOODBYE._intent}
+    )
+;
+
+D_GREETINGS_WITH_SELFID =
+  (
+    $D_GREETINGS_INTENT_SELFID
+        {_intent=D_GREETINGS_INTENT_SELFID._intent}
+        {_selfid=D_GREETINGS_INTENT_SELFID._selfid}
+        {_inLoop=D_GREETINGS_INTENT_SELFID._inLoop}
+  );
+
+
+### INTENTS ###
+D_GREETINGS_INTENT_STRICT =
+    (
+        (?(hey jibo) jibo) {_intent='heyJibo'} |
+        (hey ?$D_GREETINGS_V_THERE ?$D_GREETINGS_V_BUD) {_intent='hello'}
+    )
+;
+
+D_GREETINGS_INTENT_HELLO =
+    (
+      ($D_GREETINGS_V_HELLO ?$D_GREETINGS_V_THERE ?$D_GREETINGS_V_BUD) |
+      (greetings) | (howdy ?do) | ([salutation?s]) | (ciao|chow) | (aloha) | (hola|ola)
+    )
+  {_intent='hello'}
+;
+D_GREETINGS_INTENT_WHATSUP =
+    (
+      ($D_GREETINGS_V_WHATS|what $D_GREETINGS_V_UP) |
+      (sup)
+    )
+  {_intent='whatsUp'}
+;
+D_GREETINGS_INTENT_HOWAREYOU =
+  (
+    (
+      $D_GREETINGS_V_HOWIS $* $D_GREETINGS_V_DOING
+    )
+    |
+    (
+      $D_GREETINGS_V_HOWARE you ?$D_GREETINGS_V_DOING
+    )
+    |
+    (
+      $D_GREETINGS_V_HOWIS it $D_GREETINGS_V_GOING
+    )
+    |
+    (
+      $D_GREETINGS_V_HOWIS $D_GREETINGS_V_YOURDAY (going | been)
+    )
+  )
+  {_intent='howAreYou'}
+;
+D_GREETINGS_INTENT_GOODMORNING =
+    (
+      (?good $D_GREETINGS_V_MORNING) |
+      (good day)
+    )
+  {_intent='goodMorning'}
+;
+D_GREETINGS_INTENT_GOODAFTERNOON =
+    (
+      ?good $D_GREETINGS_V_AFTERNOON
+    )
+  {_intent='goodAfternoon'}
+;
+D_GREETINGS_INTENT_GOODEVENING =
+    (
+      ?good $D_GREETINGS_V_EVENING
+    )
+  {_intent='goodEvening'}
+;
+D_GREETINGS_INTENT_GOODNIGHT =
+  (
+    ( ?good $D_GREETINGS_V_NIGHT ) |
+    ( goodnite )|
+    ( $D_GREETINGS_V_CHILDNIGHT )
+  ){_intent='goodNight'}
+;
+D_GREETINGS_INTENT_GOODBYE =
+    (
+      $D_GREETINGS_V_GOODBYE
+    )
+  {_intent='goodBye'}
+;
+
+
+D_GREETINGS_INTENT_NOTIFICATIONS =
+(
+  ( ((do you have) | got) (anything | something | ( ?any stuff) | ( ?any notifications)) ?(for me) ?( $D_GREETINGS_V_NOTIFICATIONTIME ) )
+  |
+  (what do you have for me ?($D_GREETINGS_V_NOTIFICATIONTIME))
+){_intent='notifications'}
+;
+
+
+### D_GREETINGS SELFID ###
+D_GREETINGS_INTENT_SELFID =
+  (
+    (
+      $D_GREETINGS_V_ITSME $handle:crew {_selfid=crew._users} {_inLoop='true'}
+    )
+    |
+    (
+      $handle:crew {_selfid=crew._users} {_inLoop='true'} here
+    )
+    |
+    (
+      $D_GREETINGS_V_ITSME $factory:first_name {_selfid=first_name._first_name} {_inLoop='false'}
+    )
+  ){_intent='selfID'}
+;
+
+
+# GREETINGS VOCABULARY#
+D_GREETINGS_V_HELLO = hello|hi|hiya;
+D_GREETINGS_V_BUD = bud|buddy|(little guy);
+D_GREETINGS_V_WHATS = ((whats) | (what\'s) | (what is));
+D_GREETINGS_V_UP = up|(going on)|happening|new;
+D_GREETINGS_V_HOWIS = ((how is) | (hows) | (how\'s) | (how has));
+D_GREETINGS_V_HOWARE = ((how are) | (how\'re));
+D_GREETINGS_V_YOURDAY = your (day|morning|afternoon|evening|night|week|weekend);
+D_GREETINGS_V_GOING = going|hanging;
+D_GREETINGS_V_DOING = doing;
+D_GREETINGS_V_GOOD = good|great|nice|wonderful|([super?(b)])|happy|merry;
+D_GREETINGS_V_MORNING = morning;
+D_GREETINGS_V_AFTERNOON = afternoon;
+D_GREETINGS_V_EVENING = evening;
+D_GREETINGS_V_NIGHT = night;
+D_GREETINGS_V_CHILDNIGHT = (night night)|(nighty night);
+D_GREETINGS_V_ITSME = (its ?me)|(it\'s ?me)|(i\'m)|(i am)|(remember me);
+D_GREETINGS_V_THERE = there;
+D_GREETINGS_V_NOTIFICATIONTIME =
+  ( (today) | (this afternoon) | (this morning) | (this evening) | (tonight) | (right now));
+D_GREETINGS_V_GOODBYE =
+    (
+        goodbye|bye|(bye bye)|adios|chow|(good bye)|
+        later|(see (you|ya) ?later)|(catch you|ya later)|
+        (?(i\'ll|we\'ll) be back soon)|
+        ((i\'m)|(we\'re) heading|going|headed|(gonna|(going to) head) out ?(for a ?little bit|while))|
+        ((i\'ll|we\'ll) be gone for a ?(little) bit|while)|
+        (?(i\'ll|we\'ll) catch you on the rebound)|
+        (have a good one|day)
+    )
+;

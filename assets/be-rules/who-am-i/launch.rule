@@ -1,0 +1,5 @@
+TopRule = ((( $* who am i $* ) |
+            ( $* ?(do you know) who $* i $* am $* )|
+            (what\'s|(what is) my name))
+            {skill='\@be/who-am-i'}
+            $*);

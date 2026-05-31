@@ -1,0 +1,77 @@
+TopRule =
+($*
+    (
+        $D_CREATE {intent = D_CREATE._intent}
+    )
+
+$*) {skill='\@be/create'}{domain = 'create'}
+;
+
+### CREATE DOMAIN
+
+D_CREATE =
+(
+    $D_CREATE_ONEPHOTO {_intent='createOnePhoto'} |
+    $D_CREATE_SOMEPHOTOS {_intent='createSomePhotos'} |
+    $D_CREATE_VIDEO {_intent='createVideo'} |
+    $D_CREATE_AUDIO {_intent='createAudio'} |
+    $D_CREATE_MENU {_intent='menu'}
+)
+;
+
+D_CREATE_ONEPHOTO = (?(?$D_CREATE_V_WANT $D_CREATE_V_CREATE $*) $D_CREATE_V_ONEPHOTO);
+
+D_CREATE_SOMEPHOTOS =
+(
+    ( ?$D_CREATE_V_WANT $D_CREATE_V_CREATE $* ?$D_CREATE_V_LOTS $* $D_CREATE_V_PHOTOS) |
+    (?(?$D_CREATE_V_WANT $D_CREATE_V_CREATE $*) $D_CREATE_V_ONEPHOTOBOOTH ?$D_CREATE_V_PHOTOS) |
+    ( ?$D_CREATE_V_WANT $D_CREATE_V_CREATE $* $D_CREATE_V_PHOTOBOOTH ?$D_CREATE_V_PHOTOS)
+)
+;
+
+D_CREATE_VIDEO =
+(
+    (?(?$D_CREATE_V_WANT $D_CREATE_V_CREATE $*) $D_CREATE_V_ONEVIDEO) |
+    ( ?$D_CREATE_V_WANT $D_CREATE_V_CREATE $* $D_CREATE_V_VIDEOS)
+);
+
+D_CREATE_AUDIO =
+(
+    (?(?$D_CREATE_V_WANT $D_CREATE_V_CREATE $*) $D_CREATE_V_ONENOTE) |
+    ( ?$D_CREATE_V_WANT $D_CREATE_V_CREATE $* $D_CREATE_V_NOTES)
+);
+
+D_CREATE_MENU =
+  (
+    (?$D_CREATE_V_WANT $D_CREATE_V_OPEN ?($D_CREATE_V_THE) $D_CREATE_FUNCTION $D_CREATE_V_MENU) |
+    (?$D_CREATE_V_WANT ?$D_CREATE_V_RUN $* create ?$D_CREATE_V_MENU) |
+    (?$D_CREATE_V_WANT $D_CREATE_V_CREATESTRICT $D_CREATE_V_SOMETHING) |
+    ($D_CREATE_V_WHAT $* $D_CREATE_V_CREATESTRICT)
+  );
+
+D_CREATE_FUNCTION = (create | camera | recording | $D_CREATE_V_PHOTO | $D_CREATE_V_VIDEO | $D_CREATE_V_NOTE);
+
+### USEFUL_VOCABULARY ###
+D_CREATE_V_CREATE = (take | shoot | create | record | make | send | post | add | compose | do);
+D_CREATE_V_CREATESTRICT = (create | record | make | send | post | compose);
+D_CREATE_V_ONEPHOTO = (picture | photo | pic | photograph | selfie);
+D_CREATE_V_PHOTO = ([picture?s] | [photo?s] | [pic?s] | [photograph?s] | [selfie?s]);
+D_CREATE_V_PHOTOS = (pictures | photos | pics | photographs | selfies);
+D_CREATE_V_ONEPHOTOBOOTH = photobooth|photoshoot|(photo (shoot|booth|collage|set|group));
+D_CREATE_V_PHOTOBOOTH = [photobooth?s] | [photoshoot?s] | (photo ([shoot?s]|[booth?s]|[collage?s]|[set?s]|[group?s]));
+D_CREATE_V_PHOTOBOOTHS = photobooths|photoshoots|(photo (shoots|booths|collages|sets|groups));
+D_CREATE_V_ONEVIDEO = (video | movie | film | flick);
+D_CREATE_V_VIDEO = ([video?s] | [movie?s] | [film?s] | [flick?s]);
+D_CREATE_V_VIDEOS = (videos | movies | films | flicks);
+D_CREATE_V_ONENOTE = (audio|message|note|(voice message|file));
+D_CREATE_V_NOTE = ([audio?s]|[message?s]|[note?s]|(voice [message?s]|[file?s]));
+D_CREATE_V_NOTES = (messages|notes|(voice|audio messages|files));
+D_CREATE_V_SOMETHING = (something|stuff|(?a [thing?s]));
+D_CREATE_V_RUN = (do|launch|run|start);
+D_CREATE_V_MENU = (menu | options | list | app | choices | skill);
+D_CREATE_V_THE = (the | that | your | my);
+D_CREATE_V_LOTS = (some|many|several|((a ?whole lot|bunch)|lots|(a few|ton) ?of));
+D_CREATE_V_OPEN = (open | (go to) | (show ?(me|us)) | (bring up) | ((bring|take) (me|us) to) |
+                   load | access | display | (let (me|us) see)) ;
+D_CREATE_V_WANT = ((i|we want ?to)|(i\'d|we\'d|(i|we would) like ?to)|([let?(\')s]));
+D_CREATE_V_WHAT = (what ?all ?(can i|we));

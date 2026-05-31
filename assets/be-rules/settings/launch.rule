@@ -1,0 +1,172 @@
+TopRule =
+($*
+        (
+            $D_SETTINGS {intent=D_SETTINGS._intent}
+        )
+        |
+        (
+            $D_SETTINGS_ENROLLMENT
+                {recipient=D_SETTINGS_ENROLLMENT._recipient}
+                {enrollmentType=D_SETTINGS_ENROLLMENT._enrollmentType}
+                {intent=D_SETTINGS_ENROLLMENT._intent}
+        )
+$* ){domain='settings'}{skill='\@be/settings'}
+;
+
+### SETTINGS DOMAIN ###
+D_SETTINGS =
+(
+      $D_SETTINGS_INTENT_BATTERY {_intent=D_SETTINGS_INTENT_BATTERY._intent}
+)|
+(
+      $D_SETTINGS_INTENT_VOLUMEQUERY {_intent=D_SETTINGS_INTENT_VOLUMEQUERY._intent}
+)|
+(
+      $D_SETTINGS_INTENT_STORAGESTATUS
+          {_intent=D_SETTINGS_INTENT_STORAGESTATUS._intent}
+)|
+(
+      $D_SETTINGS_INTENT_WIFISTATUS {_intent=D_SETTINGS_INTENT_WIFISTATUS._intent}
+)|
+(
+      $D_SETTINGS_INTENT_WIFIADDNETWORK {_intent=D_SETTINGS_INTENT_WIFIADDNETWORK._intent}
+)|
+(
+      $D_SETTINGS_INTENT_WIFIREMOVENETWORK {_intent=D_SETTINGS_INTENT_WIFIREMOVENETWORK._intent}
+)|
+(
+      $D_SETTINGS_INTENT_MENU {_intent='menu'}
+)
+;
+
+
+
+
+### INTENTS ###
+D_SETTINGS_INTENT_BATTERY = battery {_intent='battery'};
+D_SETTINGS_INTENT_VOLUMEQUERY =
+(
+      ( ?((what\'s)|(what is) the|your) volume ?level)|
+      ( $D_SETTINGS_V_SHOW ?(the|your) volume ?(menu|level|page))
+)
+{_intent='volumeQuery'}
+;
+D_SETTINGS_INTENT_STORAGESTATUS =
+(
+        ( ?((what\'s)|(what is) the|your) storage|memory ?status)|
+        ( $D_SETTINGS_V_SHOW ?(the|your) storage|memory ?(status|menu|page))
+)
+{_intent='storageStatus'}
+;
+
+D_SETTINGS_INTENT_WIFISTATUS =
+(
+        ( ?((what\'s)|(what is) (the|your|$*)) $D_SETTINGS_V_WIFI ?status) |
+        ( $D_SETTINGS_V_SHOW ?(the|your) $D_SETTINGS_V_WIFI ?(status|menu|page))
+)
+{_intent='wifiStatus'}
+;
+D_SETTINGS_INTENT_WIFIADDNETWORK =
+(
+        ( add | setup ) ?a ?new $D_SETTINGS_V_WIFI
+)
+{_intent='wifiAddNetwork'}
+;
+D_SETTINGS_INTENT_WIFIREMOVENETWORK =
+(
+        ( remove | delete ) $* $D_SETTINGS_V_WIFI
+)
+{_intent='wifiRemoveNetwork'}
+;
+
+D_SETTINGS_INTENT_MENU = ?$D_SETTINGS_V_SHOW ?($D_SETTINGS_V_THE) [setting?s] ?($D_SETTINGS_V_MENU);
+
+
+### ENROLLMENT
+
+D_SETTINGS_ENROLLMENT =
+(
+    $D_SETTINGS_ENROLL_KNOWN_LM {_recipient=D_SETTINGS_ENROLL_KNOWN_LM._loopmember}{_enrollmentType=D_SETTINGS_ENROLL_KNOWN_LM._enrollmentType} |
+    $D_SETTINGS_ENROLL_UNKNOWN_LM {_recipient='null'}{_enrollmentType=D_SETTINGS_ENROLL_UNKNOWN_LM._enrollmentType}
+){_intent='enrollment'}
+;
+
+D_SETTINGS_ENROLL_KNOWN_LM = (
+    (
+        ($D_SETTINGS_V_THISIS|($D_SETTINGS_V_INTRODUCE $*) $LOOPMEMBER) |
+        ([?(re)do] $D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER) |
+        ([?(re)do] $LOOPMEMBER $D_SETTINGS_V_ENROLLMENT)
+    ){_enrollmentType='unknown'}
+    |
+    (
+        ([?(re)do] $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER) |
+        (?[?(re)do] $D_SETTINGS_ENROLLMENT_TYPE $D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER) |
+        (?[?(re)do] $D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER $D_SETTINGS_ENROLLMENT_TYPE) |
+        ([?(re)do] $LOOPMEMBER $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_ENROLLMENT) |
+        (?[?(re)do] $LOOPMEMBER $D_SETTINGS_ENROLLMENT_TYPE $D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)learn] ?(?how to recognize) $LOOPMEMBER $D_SETTINGS_ENROLLMENT_TYPE) |
+        ([?(re)learn] ?(?how to recognize) $D_SETTINGS_ENROLLMENT_TYPE ?(for|with|using) $LOOPMEMBER) |
+        ([?(re)train] ?your $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_RECOGNITION ?(for|with|using) $LOOPMEMBER) |
+        ([?(re)train] ?your $D_SETTINGS_V_RECOGNITION ?(for|with|using) $LOOPMEMBER $D_SETTINGS_ENROLLMENT_TYPE)
+    ){_enrollmentType=D_SETTINGS_ENROLLMENT_TYPE._enrollmentType}
+    |
+    (
+        ([?(re)do] $D_SETTINGS_MULTI_ENROLLMENT ?$D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER) |
+        (?[?(re)do] $D_SETTINGS_MULTI_ENROLLMENT $D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER) |
+        (?[?(re)do] $D_SETTINGS_V_ENROLLMENT ?(for|with|using) $LOOPMEMBER $D_SETTINGS_MULTI_ENROLLMENT) |
+        ([?(re)do] $LOOPMEMBER $D_SETTINGS_MULTI_ENROLLMENT ?$D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)learn] ?(?how to recognize) $LOOPMEMBER $D_SETTINGS_MULTI_ENROLLMENT) |
+        ([?(re)learn] ?(?how to recognize) $D_SETTINGS_MULTI_ENROLLMENT ?(for|with|using) $LOOPMEMBER ) |
+        ([?(re)train] ?your $D_SETTINGS_MULTI_ENROLLMENT ?$D_SETTINGS_V_RECOGNITION ?(for|with|using) $LOOPMEMBER) |
+        ([?(re)train] ?your $D_SETTINGS_V_RECOGNITION ?(for|with|using) $LOOPMEMBER $D_SETTINGS_MULTI_ENROLLMENT)
+    ){_enrollmentType='all'}
+){_loopmember=LOOPMEMBER._loopmember};
+
+
+D_SETTINGS_ENROLL_UNKNOWN_LM = (
+    (
+        (?(it\'s|(it is)) $D_SETTINGS_V_NICE $D_SETTINGS_V_MEET) |
+        ($D_SETTINGS_V_INTRODUCE $* $D_SETTINGS_V_PERSON ~0.1) |
+        (?[?(re)do] ?$D_SETTINGS_V_PRONOUN (recognition training)|(?recognition enrollment))
+    ){_enrollmentType='unknown'}
+    |
+    (
+        ([?(re)do] ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_ENROLLMENT) |
+        (?[?(re)do] ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_ENROLLMENT_TYPE $D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)learn] ?(?how to recognize) ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)train] ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_ENROLLMENT_TYPE ?$D_SETTINGS_V_ENROLLMENT)
+    ){_enrollmentType=D_SETTINGS_ENROLLMENT_TYPE._enrollmentType}
+    |
+    (
+        (?[?(re)do] ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_MULTI_ENROLLMENT $D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)learn] ?(?how to recognize) ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_MULTI_ENROLLMENT ?$D_SETTINGS_V_ENROLLMENT) |
+        ([?(re)train] ?$D_SETTINGS_V_PRONOUN $D_SETTINGS_MULTI_ENROLLMENT ?$D_SETTINGS_V_ENROLLMENT)
+    ){_enrollmentType='all'}
+);
+
+D_SETTINGS_MULTI_ENROLLMENT = (?$D_SETTINGS_ENROLLMENT_TYPE $D_SETTINGS_ENROLLMENT_TYPE and $D_SETTINGS_ENROLLMENT_TYPE);
+
+
+D_SETTINGS_ENROLLMENT_TYPE = (
+    (voice) {_enrollmentType='voice'} |
+    (face|facial) {_enrollmentType='face'} |
+    (name) {_enrollmentType='name'} |
+    (complete|full) {_enrollmentType='all'}
+);
+
+
+LOOPMEMBER = $handle:crew{_loopmember = crew._users};
+
+### USEFUL VOCABULARY ###
+D_SETTINGS_V_PRONOUN = (my|your|his|her);
+D_SETTINGS_V_PERSON = ([some((body)|(one))]|(this person)|(my friend)|($factory:first_name));
+D_SETTINGS_V_INTRODUCE = (introduce|present|presentation|introduction|meet);
+D_SETTINGS_V_THISIS = (this is)|(he is)|(she is);
+D_SETTINGS_V_NICE = (nice|good|great|(?a pleasure));
+D_SETTINGS_V_MEET = (?to (make your acquaintaince)|(be introduced ?to you)|(meet you));
+D_SETTINGS_V_RECOGNITION = (recognition|id|identification|pronunciation);
+D_SETTINGS_V_ENROLLMENT = ($D_SETTINGS_V_RECOGNITION|(?$D_SETTINGS_V_RECOGNITION training|enrollment));
+D_SETTINGS_V_SHOW = (open | (go to) | (show ?(me|us)) | (bring up) | ((bring|take) (me|us) to) | load | access | display | launch | (let (me|us) see)) ;
+D_SETTINGS_V_MENU = (menu | options | list | app) ;
+D_SETTINGS_V_WIFI = wifi|network|(wi-fi)|(why fy) ?network;
+D_SETTINGS_V_THE = (the|that|your);

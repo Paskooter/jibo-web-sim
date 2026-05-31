@@ -1,0 +1,13 @@
+TopRule = ($* $CIRCUIT_SAVER {skill='\@be/circuit-saver'} $*);
+
+CIRCUIT_SAVER =
+    (let\'s play)|
+    ($LETS_PLAY (?a game))|
+    ($LETS_PLAY $CIRCUIT saver)|
+    ($LETS_PLAY $CIRCUIT ?game)|
+    ($CIRCUIT saver)
+    ;
+
+LETS_PLAY = (?let\'s play) | (?(?i wanna) play);
+
+CIRCUIT = circuit | circuits;
