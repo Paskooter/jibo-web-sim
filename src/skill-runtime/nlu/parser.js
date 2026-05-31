@@ -42,33 +42,59 @@ export function parse(source) {
   return out;
 
   // ---- expression grammar ----
-  // Expression  = AltExpr
-  // AltExpr     = SeqExpr ('|' SeqExpr)*
-  // SeqExpr     = Item+
+  // jibo-nlu's `.rule` DSL binds `|` TIGHTER than sequence — opposite of
+  // standard regex/BNF. So `do i|we|you have` parses as `do (i|we|you) have`,
+  // not `(do i)|(we)|(you have)`. Patterns throughout the on-robot launch
+  // rules rely on this: e.g. `(what time is|will $w03 show ?be $w03 on)` is
+  // `what time (is|will) $w03 show ?be $w03 on`, and `(?$V_CANYOU get|give|access)`
+  // is `?$V_CANYOU (get|give|access)`. Reading these with alt < seq drops
+  // most of the meaningful match (chitchat then dominates everything because
+  // its loose-alt branches survive while clock's tight-alt structure breaks).
+  //
+  // Expression  = SeqExpr
+  // SeqExpr     = AltItem+
+  // AltItem     = Item ('|' Item)*       (alt of single items — tight binding)
   // Item        = ['?'] Atom Tags?
   // Atom        = '(' Expression ')' | RULEREF | STAR | STRING | ID | CHARCLASS
-  // Tags        = '{' Tag '}' ('{' Tag '}')*   (consecutive {key=val} blocks)
+  // Tags        = '{' Tag '}' ('{' Tag '}')*
   // Tag         = ID '=' (STRING | (ID '.' ID))
 
-  function parseExpr() { return parseAlt(); }
+  function parseExpr() { return parseSeq(); }
 
   function parseAlt() {
-    const left = parseSeq();
+    // Tight alternation: each alt arm is a single item (with optional tags),
+    // NOT a full seq. To express "loose" alt across whole sequences, the
+    // author must use explicit parens: `(A B) | (C D)`.
+    const left = parseItem();
     if (peek().kind !== 'PIPE') return left;
     const alts = [left];
     while (peek().kind === 'PIPE') {
       pos += 1;
-      alts.push(parseSeq());
+      alts.push(parseItem());
     }
     return { type: 'alt', alts };
   }
 
   function parseSeq() {
+    // Each seq element is itself an AltItem (tight `X|Y|Z` chain) so that
+    // `A B|C D` parses as `A (B|C) D`, not `(A B)|(C D)`.
     const items = [];
-    while (canStartItem(peek())) items.push(parseItem());
+    while (canStartItem(peek())) items.push(parseAlt());
     if (items.length === 0) throw new Error(`parser: empty sequence at ${peek().line}:${peek().col}`);
     if (items.length === 1) return items[0];
-    return { type: 'seq', items };
+    // `(X Y {tag=X._field})` — the trailing tag block on the LAST item is
+    // semantically a GROUP tag in the cloud's FST: it fires at the end of the
+    // sequence with visibility into every prior item's subFields. We model this
+    // by hoisting the last item's trailing tags up to the seq node, where the
+    // matcher applies them against accumulated subFields after the full match.
+    // Tags on non-last items stay local (e.g. `$X {a=b} $Y`).
+    const seq = { type: 'seq', items };
+    const last = items[items.length - 1];
+    if (last.tags && last.tags.length) {
+      seq.tags = last.tags;
+      delete last.tags;
+    }
+    return seq;
   }
   function canStartItem(t) {
     return t.kind === 'ID' || t.kind === 'STRING' || t.kind === 'LPAREN' ||

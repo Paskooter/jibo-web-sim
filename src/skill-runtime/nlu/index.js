@@ -46,29 +46,33 @@ export function createRegistry() {
   function parse(text) {
     const tokens = tokenize(text);
     if (tokens.length === 0) return null;
+    // Score every skill's best full-input match and pick the most specific
+    // overall — a clock rule like `what time is it` beats a friendly-tips rule
+    // shaped as `$* do $*` because the former matches 4 literal tokens vs the
+    // latter's 1. On ties, earlier-registered skills win.
+    let winner = null;
     for (const skill of skills) {
       const m = matchRule(skill.topRule, tokens, { rules: skill.rules });
       if (!m) continue;
-      // The launch.rule typically tags {skill='@be/X'} {intent=...} {domain=...}.
-      // Use those from the matched entities. Fallback to the skill ID we
-      // registered with if {skill} wasn't tagged.
-      const ent = m.entities || {};
-      return {
-        asr: { text, confidence: 1 },
-        nlu: {
-          entities: ent,
-          intent: ent.intent || ent.action || '',
-          rules: ['launch'],
-        },
-        match: {
-          skillID: ent.skill || skill.skillID,
-          launch: true,
-          onRobot: skill.onRobot,
-          cloudSkill: ent.cloudSkill,
-        },
-      };
+      const spec = m.specificity || 0;
+      if (!winner || spec > winner.specificity) winner = { skill, m, specificity: spec };
     }
-    return null;
+    if (!winner) return null;
+    const ent = winner.m.entities || {};
+    return {
+      asr: { text, confidence: 1 },
+      nlu: {
+        entities: ent,
+        intent: ent.intent || ent.action || '',
+        rules: ['launch'],
+      },
+      match: {
+        skillID: ent.skill || winner.skill.skillID,
+        launch: true,
+        onRobot: winner.skill.onRobot,
+        cloudSkill: ent.cloudSkill,
+      },
+    };
   }
 
   return { loadSkill, parse, _skills: skills };

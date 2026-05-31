@@ -68,10 +68,12 @@ function* match(node, start, ctx, depth) {
   switch (node.type) {
     case 'lit': {
       // Lowercased equality. Word may contain escapes / `'` / `@` etc.
+      // specificity: 1 — a literal token in the rule counts toward specificity,
+      // which the registry uses to break ties between candidate skills.
       if (start < tokens.length && tokens[start] === node.word.toLowerCase()) {
         const ent = freshEnts(EMPTY); const sub = freshEnts(EMPTY);
         const tagged = applyTags(node.tags, ent, sub, { /* no sub */ });
-        yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields };
+        yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields, specificity: 1 };
       }
       return;
     }
@@ -84,7 +86,7 @@ function* match(node, start, ctx, depth) {
       for (const v of variants) {
         if (start < tokens.length && tokens[start] === v.toLowerCase()) {
           const tagged = applyTags(node.tags, EMPTY, EMPTY, {});
-          yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields };
+          yield { end: start + 1, entities: tagged.entities, subFields: tagged.subFields, specificity: 1 };
         }
       }
       return;
@@ -95,32 +97,37 @@ function* match(node, start, ctx, depth) {
       // tight matches; alternatives like `?a` after `$*` then naturally fill
       // in. Without lazy, `$*` eagerly grabs everything and adjacent literals
       // never match.
+      // specificity: 0 — star matches don't count, so longest-match across
+      // skills picks the rule that's filled with literal content, not the one
+      // that wraps a single literal in `$* X $*`.
       const maxN = (typeof node.max === 'number') ? node.max : (tokens.length - start);
       for (let n = 0; n <= maxN; n += 1) {
         if (start + n > tokens.length) break;
         const tagged = applyTags(node.tags, EMPTY, EMPTY, {});
-        yield { end: start + n, entities: tagged.entities, subFields: tagged.subFields };
+        yield { end: start + n, entities: tagged.entities, subFields: tagged.subFields, specificity: 0 };
       }
       return;
     }
     case 'opt': {
       // Try zero-match first, then a real match. (Zero-match keeps parent
       // pos at `start` with no entity updates.)
-      yield { end: start, entities: EMPTY, subFields: EMPTY };
+      yield { end: start, entities: EMPTY, subFields: EMPTY, specificity: 0 };
       for (const m of match(node.item, start, ctx, depth + 1)) {
         const tagged = applyTags(node.tags, m.entities, m.subFields, m.subFields);
-        yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields };
+        yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields, specificity: m.specificity || 0 };
       }
       return;
     }
     case 'seq': {
-      // Match each item in order. Generator-yielding so we backtrack on
-      // failure of later items.
-      yield* matchSeq(node.items, 0, start, EMPTY, EMPTY, ctx, depth);
-      // After full sequence, apply seq-level tags too (rare — typically
-      // tags hang off the inner items).
-      // Handled inside matchSeq via the seq's own tags? — we'd attach to
-      // the outermost group instead. Skip here.
+      // Match each item in order, backtracking on failure of later items.
+      // Apply seq-level tags (hoisted from the trailing `(X Y {tag})` block
+      // by the parser) AFTER the full sequence has matched, with visibility
+      // into all accumulated subFields — that's how `{intent=Sub._field}`
+      // group tags work in the cloud's compiler.
+      for (const m of matchSeq(node.items, 0, start, EMPTY, EMPTY, 0, ctx, depth)) {
+        const tagged = applyTags(node.tags, m.entities, m.subFields, m.subFields);
+        yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields, specificity: m.specificity || 0 };
+      }
       return;
     }
     case 'alt': {
@@ -128,7 +135,7 @@ function* match(node, start, ctx, depth) {
       for (const a of node.alts) {
         for (const m of match(a, start, ctx, depth + 1)) {
           const tagged = applyTags(node.tags, m.entities, m.subFields, m.subFields);
-          yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields };
+          yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields, specificity: m.specificity || 0 };
         }
       }
       return;
@@ -148,23 +155,28 @@ function* match(node, start, ctx, depth) {
       if (!target) {
         // Fallback: match 1..3 words greedily (factory slots typically span
         // a short noun phrase). The lit-vs-subfield tag eval handles missing
-        // values gracefully (undefined → not set).
+        // values gracefully (undefined → not set). specificity: 0 because we
+        // didn't actually verify factory content — counted as a wildcard.
         for (let n = 1; n <= 3; n += 1) {
           if (start + n > tokens.length) break;
           const tagged = applyTags(node.tags, EMPTY, EMPTY, { [node.name]: { /* no fields */ } });
-          yield { end: start + n, entities: tagged.entities, subFields: tagged.subFields };
+          yield { end: start + n, entities: tagged.entities, subFields: tagged.subFields, specificity: 0 };
         }
         // Also try zero-match (factory might be optional in context).
         const tagged0 = applyTags(node.tags, EMPTY, EMPTY, { [node.name]: {} });
-        yield { end: start, entities: tagged0.entities, subFields: tagged0.subFields };
+        yield { end: start, entities: tagged0.entities, subFields: tagged0.subFields, specificity: 0 };
         return;
       }
       // Real ref: match the sub-rule, then expose its subFields to our tags
-      // under the sub-rule's name (so `{key=SubRule._field}` works).
+      // under the sub-rule's name (so `{key=SubRule._field}` works on this
+      // ref's own tags). Also merge that namespace INTO the returned subFields
+      // so an enclosing seq's group-level tag can later read `SubRule._field`
+      // — the matchSeq accumulator will carry the namespaced map up.
       for (const m of match(target, start, ctx, depth + 1)) {
         const exposed = { [node.name]: m.subFields };
         const tagged = applyTags(node.tags, m.entities, m.subFields, exposed);
-        yield { end: m.end, entities: tagged.entities, subFields: tagged.subFields };
+        const subsForParent = Object.assign({}, tagged.subFields, exposed);
+        yield { end: m.end, entities: tagged.entities, subFields: subsForParent, specificity: m.specificity || 0 };
       }
       return;
     }
@@ -175,15 +187,17 @@ function* match(node, start, ctx, depth) {
 
 // Sequence helper — recursively threads through each item, accumulating
 // entities + subFields. Yields on full completion of the sequence.
-function* matchSeq(items, idx, pos, ents, subs, ctx, depth) {
+// Specificity sums across items so a seq of literals out-scores a seq with
+// the same overall length but more wildcard kleene/factory slots.
+function* matchSeq(items, idx, pos, ents, subs, specSoFar, ctx, depth) {
   if (idx >= items.length) {
-    yield { end: pos, entities: ents, subFields: subs };
+    yield { end: pos, entities: ents, subFields: subs, specificity: specSoFar };
     return;
   }
   for (const m of match(items[idx], pos, ctx, depth + 1)) {
     const nextEnts = mergeObj(ents, m.entities);
     const nextSubs = mergeObj(subs, m.subFields);
-    yield* matchSeq(items, idx + 1, m.end, nextEnts, nextSubs, ctx, depth + 1);
+    yield* matchSeq(items, idx + 1, m.end, nextEnts, nextSubs, specSoFar + (m.specificity || 0), ctx, depth + 1);
   }
 }
 function mergeObj(a, b) {
@@ -207,14 +221,19 @@ function expandCharClass(body) {
   return out;
 }
 
-// Public: try to match a TopRule (or any starting node) against the input
-// tokens. Returns the first full-input match's {entities, subFields}, or
-// null if no rule consumes everything plus the TopRule pattern allows
-// the `$*`-wraps to slack against extra surrounding words.
+// Public: try to match a TopRule against the input tokens. Returns the BEST
+// full-input match — highest specificity (sum of literal/class tokens matched
+// along the path). On ties, returns the first one discovered, mirroring the
+// cloud's first-best behaviour. Returns null when no full match exists.
 export function matchRule(node, tokens, ctx) {
   const fullCtx = Object.assign({ tokens, rules: ctx.rules || {}, maxDepth: 250 }, ctx);
+  let best = null;
   for (const m of match(node, 0, fullCtx, 0)) {
-    if (m.end === tokens.length) return { entities: m.entities, subFields: m.subFields };
+    if (m.end !== tokens.length) continue;
+    const spec = m.specificity || 0;
+    if (!best || spec > best.specificity) {
+      best = { entities: m.entities, subFields: m.subFields, specificity: spec };
+    }
   }
-  return null;
+  return best;
 }
