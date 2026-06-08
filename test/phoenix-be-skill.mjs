@@ -147,6 +147,13 @@ async function main() {
     }
   }
 
+  // --- cloud skills via raw CLIENT_ASR (gateway NLU routes to a cloud skill) ----
+  for (const [text, skillId] of [['tell me my personal report', 'report-skill'], ['who is ada lovelace', 'answer-skill']]) {
+    const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:casr:${skillId}`);
+    const act = frames.find((f) => f.type === 'SKILL_ACTION');
+    check(`CLIENT_ASR "${text}" -> ${skillId} SKILL_ACTION`, act && act.data && act.data.skill && act.data.skill.id === skillId, act && act.data && act.data.skill);
+  }
+
   // --- global turn: bare CLIENT_NLU, no LISTEN/CONTEXT (mimic_global_turn) ----
   {
     const frames = await runTurn([clientNLU('askForTime', { skill: '@be/clock' })], 'GLOBAL');
