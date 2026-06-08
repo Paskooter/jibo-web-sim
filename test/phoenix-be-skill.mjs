@@ -55,6 +55,7 @@ const context = () => ({
 });
 const listen = (mode) => ({ type: 'LISTEN', msgID: 'l', ts: Date.now(), data: { lang: 'en-US', hotphrase: false, rules: ['launch'], mode } });
 const clientNLU = (intent, entities = {}) => ({ type: 'CLIENT_NLU', msgID: 'n', ts: Date.now(), data: { rules: ['launch'], intent, entities } });
+const clientASR = (text) => ({ type: 'CLIENT_ASR', msgID: 'n', ts: Date.now(), data: { text } });
 
 const procs = [];
 function startGatewayStack() {
@@ -111,6 +112,24 @@ async function main() {
     check('cloud: non-final LISTEN, answer-skill match', lr && lr.final === false && lr.data.match.skillID === 'answer-skill', lr && lr.data.match);
     const act = frames.find((f) => f.type === 'SKILL_ACTION');
     check('cloud: final SKILL_ACTION with JCP', act && act.final === true && act.data.action.config.jcp.type === 'SEQUENCE', act && act.data && act.data.action && act.data.action.type);
+  }
+
+  // --- be-skills via raw CLIENT_ASR (the real browser path: gateway does NLU) ----
+  // Each utterance must NLU+route to the expected on-robot be-skill.
+  {
+    const cases = [
+      ['what time is it', '@be/clock'],
+      ['what is the date today', '@be/clock'],
+      ['hello jibo', '@be/greetings'],
+      ['im home', '@be/greetings'],
+      ['show me the gallery', '@be/gallery'],
+      ['take a picture', '@be/create'],
+    ];
+    for (const [text, skillID] of cases) {
+      const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:asr:${skillID}`);
+      const lr = frames.find((f) => f.type === 'LISTEN');
+      check(`CLIENT_ASR "${text}" -> ${skillID} onRobot`, lr && lr.final === true && lr.data.match && lr.data.match.skillID === skillID && lr.data.match.onRobot === true, lr && lr.data && lr.data.match);
+    }
   }
 
   // --- no-match turn: unknown intent -> final LISTEN match:null -------------
