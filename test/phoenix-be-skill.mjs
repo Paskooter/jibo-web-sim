@@ -43,7 +43,8 @@ function runTurn(msgs, transID, path = '/listen') {
     ws.on('message', (d) => {
       const m = JSON.parse(d.toString());
       frames.push(m);
-      if (m.final) { clearTimeout(timer); ws.close(); resolve(frames); }
+      // resolve on a terminal frame OR a (possibly non-final) SKILL_ACTION (multi-turn turn 1).
+      if (m.final || m.type === 'SKILL_ACTION') { clearTimeout(timer); ws.close(); resolve(frames); }
     });
     ws.on('error', (e) => { clearTimeout(timer); reject(e); });
   });
@@ -169,6 +170,22 @@ async function main() {
     const frames = await runTurn([listen('CLIENT_NLU'), context(), clientNLU('totallyUnknownIntent', {})], 'tid:none');
     const lr = frames.find((f) => f.type === 'LISTEN');
     check('no-match: final LISTEN with match null', lr && lr.final === true && lr.data.match === null, lr && lr.data.match);
+  }
+
+  // --- multi-turn GraphSkill: color-skill (LISTEN_LAUNCH final:false -> LISTEN_UPDATE) ----
+  {
+    const t1 = await runTurn([listen('CLIENT_NLU'), context(), clientNLU('favoriteColorChat', {})], 'tid:color1');
+    const act1 = t1.find((f) => f.type === 'SKILL_ACTION');
+    check('multi-turn t1: color-skill SKILL_ACTION non-final (asks the question)', act1 && act1.data.skill.id === 'color-skill' && act1.data.final === false, act1 && act1.data && { id: act1.data.skill && act1.data.skill.id, final: act1.data.final });
+    const session = act1 && act1.data.skill.session;
+    check('multi-turn t1: session carried for resume', !!(session && session.id), session);
+
+    // turn 2: robot echoes the skill session in CONTEXT and answers "blue" (raw ASR).
+    const ctx2 = { type: 'CONTEXT', msgID: 'c2', ts: Date.now(), data: { general: { release: '1.9.0' }, runtime: { loop: { users: [] }, dialog: {}, perception: {} }, skill: { id: 'color-skill', session } } };
+    const t2 = await runTurn([listen('CLIENT_ASR'), ctx2, clientASR('blue')], 'tid:color2');
+    const act2 = t2.find((f) => f.type === 'SKILL_ACTION');
+    const esml2 = act2 && act2.data.action && act2.data.action.config.jcp.children[0].config.play.esml;
+    check('multi-turn t2: LISTEN_UPDATE resumes -> final SKILL_ACTION mentioning "blue"', act2 && act2.data.final === true && /blue/.test(esml2 || ''), { final: act2 && act2.data.final, esml: esml2 });
   }
 
   // --- proactive channel (/proactive): TRIGGER + CONTEXT -> filter -> PROACTIVE --
