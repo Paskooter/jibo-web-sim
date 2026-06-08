@@ -138,6 +138,13 @@ async function main() {
     }
   }
 
+  // --- global turn: bare CLIENT_NLU, no LISTEN/CONTEXT (mimic_global_turn) ----
+  {
+    const frames = await runTurn([clientNLU('askForTime', { skill: '@be/clock' })], 'GLOBAL');
+    const lr = frames.find((f) => f.type === 'LISTEN');
+    check('global turn (bare CLIENT_NLU) routes to @be/clock', lr && lr.final === true && lr.data.match && lr.data.match.skillID === '@be/clock', lr && lr.data && lr.data.match);
+  }
+
   // --- no-match turn: unknown intent -> final LISTEN match:null -------------
   {
     const frames = await runTurn([listen('CLIENT_NLU'), context(), clientNLU('totallyUnknownIntent', {})], 'tid:none');
