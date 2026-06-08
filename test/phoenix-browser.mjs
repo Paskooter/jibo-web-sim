@@ -118,37 +118,30 @@ async function main() {
   if (options.includes(SKILL_DIR)) await page.select('#skill-picker', SKILL_DIR).catch((e) => log('select:', e.message));
   await sleep(WAIT_MS);
 
-  // Type a turn into the chat panel.
+  // Single-utterance spot-check. Breadth across all be-skills lives in the fast, deterministic
+  // proxy harness (phoenix-be-skill.mjs); this confirms a real end-to-end launch in the browser.
   const chatInput = await page.$('.chat-panel input');
   check('chat input present', !!chatInput);
-  if (chatInput) {
-    await page.click('[data-tab="chat"]').catch(() => {});
-    await chatInput.type(UTTERANCE, { delay: 10 });
-    await page.keyboard.press('Enter');
-    log(`typed: "${UTTERANCE}"`);
-  }
-  await sleep(8000);
+  await page.click('[data-tab="chat"]').catch(() => {});
+  await chatInput.type(UTTERANCE, { delay: 8 });
+  await page.keyboard.press('Enter');
+  log(`typed: "${UTTERANCE}"`);
+  await sleep(9000);
 
   const speak = await page.evaluate(() => window.__speak || []).catch(() => []);
-  const jiboChat = await page.evaluate(() => Array.from(document.querySelectorAll('.chat-msg.chat-jibo')).map((e) => e.textContent.slice(0, 80))).catch(() => []);
-
-  // On-robot skill launches are logged by the sim's SkillSwitchScheduler/Util.
+  // The sim's SkillSwitchScheduler/Util logs an on-robot skill launch.
   const switches = [];
   for (const l of allLogs) { const m = /(?:switching skill|BeSkill open)\s+(@be\/[\w-]+)/.exec(l); if (m) switches.push(m[1]); }
+  const sawTR = bridge.some((l) => l.includes('TURN_RESULT'));
 
-  log('--- [hub-bridge] trace ---'); bridge.slice(0, 30).forEach((l) => log(' ', l.slice(0, 200)));
   log('gateway WS connections seen:', stack.conn());
-  log('jibo speak calls:', speak.length, speak.slice(0, 6));
-  log('jibo chat msgs:', jiboChat.length, jiboChat.slice(0, 6));
+  log('jibo speak calls:', speak.length, speak.slice(0, 4));
   log('be-skill switches:', Array.from(new Set(switches)).join(', ') || '(none)');
 
-  check('browser cloud bridge reached the gateway', stack.conn() > 0, { connections: stack.conn(), bridge: bridge.slice(0, 6) });
-  check('hub returned a TURN_RESULT for the turn', bridge.some((l) => l.includes('TURN_RESULT')), bridge.slice(0, 8));
-  if (EXPECT_SKILL) {
-    check(`launched skill ${EXPECT_SKILL}`, switches.includes(EXPECT_SKILL), { switches, speak, jiboChat });
-  } else {
-    check('be-skill launched (Jibo responded)', (speak.length + jiboChat.length) > 0, { speak, jiboChat });
-  }
+  check('browser cloud bridge reached the gateway', stack.conn() > 0, { connections: stack.conn() });
+  check('hub returned a TURN_RESULT for the turn', sawTR, bridge.slice(0, 8));
+  if (EXPECT_SKILL) check(`launched ${EXPECT_SKILL}`, switches.includes(EXPECT_SKILL), { switches, speak });
+  else check('be-skill launched (Jibo responded)', speak.length > 0 || switches.length > 0, { speak, switches });
 
   await page.screenshot({ path: '/tmp/phoenix-browser.png' }).catch(() => {});
   log('screenshot: /tmp/phoenix-browser.png');

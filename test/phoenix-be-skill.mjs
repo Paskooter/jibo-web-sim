@@ -122,8 +122,14 @@ async function main() {
       ['what is the date today', '@be/clock'],
       ['hello jibo', '@be/greetings'],
       ['im home', '@be/greetings'],
-      ['show me the gallery', '@be/gallery'],
+      ['who am i', '@be/who-am-i'],
+      ['what features do you have', '@be/friendly-tips'],
+      ['open the main menu', '@be/main-menu'],
+      ['open settings', '@be/settings'],
       ['take a picture', '@be/create'],
+      ['show me the gallery', '@be/gallery'],
+      ['lets play circuit saver', '@be/circuit-saver'],
+      ['trigger the lights', '@be/ifttt'],
     ];
     for (const [text, skillID] of cases) {
       const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:asr:${skillID}`);
