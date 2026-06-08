@@ -114,6 +114,15 @@ async function main() {
     check('cloud: final SKILL_ACTION with JCP', act && act.final === true && act.data.action.config.jcp.type === 'SEQUENCE', act && act.data && act.data.action && act.data.action.type);
   }
 
+  // --- cloud report-skill + chitchat-skill (distinct hosted skills) ----------
+  for (const [intent, skillId] of [['launchPersonalReport', 'report-skill'], ['aprilFools', 'chitchat-skill']]) {
+    const frames = await runTurn([listen('CLIENT_NLU'), context(), clientNLU(intent, {})], `tid:${skillId}`);
+    const lr = frames.find((f) => f.type === 'LISTEN');
+    const act = frames.find((f) => f.type === 'SKILL_ACTION');
+    check(`cloud: "${intent}" -> ${skillId} match`, lr && lr.data.match && lr.data.match.skillID === skillId, lr && lr.data && lr.data.match);
+    check(`cloud: ${skillId} returns its own SKILL_ACTION`, act && act.final === true && act.data.skill.id === skillId && act.data.action.config.jcp.type === 'SEQUENCE', act && act.data && act.data.skill);
+  }
+
   // --- be-skills via raw CLIENT_ASR (the real browser path: gateway does NLU) ----
   // Each utterance must NLU+route to the expected on-robot be-skill.
   {
