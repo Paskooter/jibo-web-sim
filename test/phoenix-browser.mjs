@@ -17,6 +17,9 @@ const PHOENIX_DIR = process.env.PHOENIX_DIR || '/home/shell/work/phoenix';
 const SECRET = process.env.SECRET || 'phx-it-secret';
 const SKILL_DIR = process.argv[2] || '/skills/jibo-be';
 const UTTERANCE = process.argv[3] || 'what time is it';
+// Optional: assert the turn launched this specific on-robot skill (e.g. '@be/gallery').
+// Useful for skills that show a screen instead of speaking.
+const EXPECT_SKILL = process.argv[4] || process.env.EXPECT_SKILL || '';
 const WAIT_MS = Number(process.env.WAIT_MS || 18000);
 // The sim hard-codes the hub at <server-field>:9000 (live-eye.js: api.init({port:9000})),
 // so the gateway MUST listen on 9000 and the Server field is the host only.
@@ -129,14 +132,23 @@ async function main() {
   const speak = await page.evaluate(() => window.__speak || []).catch(() => []);
   const jiboChat = await page.evaluate(() => Array.from(document.querySelectorAll('.chat-msg.chat-jibo')).map((e) => e.textContent.slice(0, 80))).catch(() => []);
 
+  // On-robot skill launches are logged by the sim's SkillSwitchScheduler/Util.
+  const switches = [];
+  for (const l of allLogs) { const m = /(?:switching skill|BeSkill open)\s+(@be\/[\w-]+)/.exec(l); if (m) switches.push(m[1]); }
+
   log('--- [hub-bridge] trace ---'); bridge.slice(0, 30).forEach((l) => log(' ', l.slice(0, 200)));
   log('gateway WS connections seen:', stack.conn());
   log('jibo speak calls:', speak.length, speak.slice(0, 6));
   log('jibo chat msgs:', jiboChat.length, jiboChat.slice(0, 6));
+  log('be-skill switches:', Array.from(new Set(switches)).join(', ') || '(none)');
 
   check('browser cloud bridge reached the gateway', stack.conn() > 0, { connections: stack.conn(), bridge: bridge.slice(0, 6) });
   check('hub returned a TURN_RESULT for the turn', bridge.some((l) => l.includes('TURN_RESULT')), bridge.slice(0, 8));
-  check('be-skill launched (Jibo responded)', (speak.length + jiboChat.length) > 0, { speak, jiboChat });
+  if (EXPECT_SKILL) {
+    check(`launched skill ${EXPECT_SKILL}`, switches.includes(EXPECT_SKILL), { switches, speak, jiboChat });
+  } else {
+    check('be-skill launched (Jibo responded)', (speak.length + jiboChat.length) > 0, { speak, jiboChat });
+  }
 
   await page.screenshot({ path: '/tmp/phoenix-browser.png' }).catch(() => {});
   log('screenshot: /tmp/phoenix-browser.png');
