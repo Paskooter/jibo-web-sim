@@ -14,7 +14,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const PHOENIX_DIR = process.env.PHOENIX_DIR || '/home/shell/work/phoenix';
 const SECRET = process.env.SECRET || 'phx-it-secret';
-const P = { gateway: 7710, nlu: 7711, skills: 7714, sim: 8090 };
+const P = { gateway: 7710, nlu: 7711, skills: 7714, history: 7713, sim: 8090 };
 
 const log = (...a) => console.log('[it]', ...a);
 let failures = 0;
@@ -33,9 +33,9 @@ async function waitForHttp(url, ms = 10000) {
 }
 
 // Run one turn through the sim proxy; collect hub frames until `final`.
-function runTurn(msgs, transID) {
+function runTurn(msgs, transID, path = '/listen') {
   return new Promise((resolve, reject) => {
-    const url = `ws://localhost:${P.sim}/__cloud-ws?upstream=${encodeURIComponent(`localhost:${P.gateway}`)}&path=${encodeURIComponent('/listen')}&transID=${encodeURIComponent(transID)}`;
+    const url = `ws://localhost:${P.sim}/__cloud-ws?upstream=${encodeURIComponent(`localhost:${P.gateway}`)}&path=${encodeURIComponent(path)}&transID=${encodeURIComponent(transID)}`;
     const ws = new WebSocket(url);
     const frames = [];
     const timer = setTimeout(() => { ws.close(); reject(new Error('turn timeout')); }, 12000);
@@ -63,14 +63,17 @@ function startGatewayStack() {
   process.env.ETCO_server_hubTokenSecret = SECRET;
   process.env.NET_parser = `localhost:${P.nlu}`;
   process.env.NET_skills = `localhost:${P.skills}`;
+  process.env.NET_history = `localhost:${P.history}`;
   delete process.env.ETCO_hub_disableAuth;
   return import(`${PHOENIX_DIR}/packages/nlu/src/index.js`).then(async (nlu) => {
     const skills = await import(`${PHOENIX_DIR}/packages/skills/src/index.js`);
+    const history = await import(`${PHOENIX_DIR}/packages/history/src/index.js`);
     const gw = await import(`${PHOENIX_DIR}/packages/gateway/src/index.js`);
     const nluSrv = await nlu.start(P.nlu);
     const skillsSrv = await skills.start(P.skills);
+    const historySrv = await history.start(P.history);
     const g = await gw.start(P.gateway);
-    return { nluSrv, skillsSrv, g };
+    return { nluSrv, skillsSrv, historySrv, g };
   });
 }
 
@@ -168,10 +171,31 @@ async function main() {
     check('no-match: final LISTEN with match null', lr && lr.final === true && lr.data.match === null, lr && lr.data.match);
   }
 
+  // --- proactive channel (/proactive): TRIGGER + CONTEXT -> filter -> PROACTIVE --
+  // contextRules make SURPRISE+morning+known-person eligible for report-skill only, and
+  // NEW_ARRIVAL eligible for @be/greetings only (greetings requires TRIGGER_SOURCE != SURPRISE).
+  {
+    const proCtx = () => ({
+      type: 'CONTEXT', msgID: 'pc', ts: Date.now(),
+      data: { general: { release: '1.9.0' }, runtime: { loop: { users: [] }, dialog: {}, perception: { speaker: 'looper-1', peoplePresent: [{ id: 'looper-1' }] }, location: { iso: '2026-06-08T09:00:00-04:00' } }, skill: null },
+    });
+    const trigger = (src, looperID) => ({ type: 'TRIGGER', msgID: 'tg', ts: Date.now(), data: { triggerSource: src, triggerData: { looperID } } });
+
+    const s = await runTurn([trigger('SURPRISE', 'looper-1'), proCtx()], 'tid:pro-surprise', '/proactive');
+    const sPro = s.find((f) => f.type === 'PROACTIVE');
+    check('proactive SURPRISE -> report-skill match (cloud, non-final)', sPro && sPro.data.match && sPro.data.match.skillID === 'report-skill' && sPro.data.match.isProactive === true && sPro.final === false, sPro && sPro.data);
+    const sAct = s.find((f) => f.type === 'SKILL_ACTION');
+    check('proactive report-skill returns SKILL_ACTION', sAct && sAct.final === true && sAct.data.skill.id === 'report-skill', sAct && sAct.data && sAct.data.skill);
+
+    const a = await runTurn([trigger('NEW_ARRIVAL', 'looper-1'), proCtx()], 'tid:pro-arrival', '/proactive');
+    const aPro = a.find((f) => f.type === 'PROACTIVE');
+    check('proactive NEW_ARRIVAL -> @be/greetings onRobot match (final)', aPro && aPro.final === true && aPro.data.match && aPro.data.match.skillID === '@be/greetings' && aPro.data.match.onRobot === true, aPro && aPro.data);
+  }
+
   log(failures ? `DONE with ${failures} FAILURE(S)` : 'ALL CHECKS PASSED');
   for (const c of procs) c.kill();
   // close in-process servers
-  try { stack.g.wss.close(); stack.g.service.server.close(); stack.nluSrv.close(); stack.skillsSrv.close(); } catch { /* */ }
+  try { stack.g.wss.close(); stack.g.service.server.close(); stack.nluSrv.close(); stack.skillsSrv.close(); stack.historySrv.close(); } catch { /* */ }
   process.exit(failures ? 1 : 0);
 }
 
