@@ -738,6 +738,64 @@ function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
   }
 }
 
+// Stream the microphone to an open turn WS exactly like the robot's audio path:
+// 16 kHz 16-bit mono PCM, binary frames every ~100 ms, until the turn finishes.
+// (hub-client AudioStreamSession ships 6400 B/100 ms; mic capture is realtime so
+// our frames are ~3200 B/100 ms — same wire format, same VAD behavior.)
+function streamMicToWS(turnWS, transID) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    console.warn('[hub-bridge] mic unavailable (getUserMedia missing)');
+    return;
+  }
+  let ctx = null; let stream = null; let node = null; let src = null; let stopped = false;
+  const stop = () => {
+    if (stopped) return; stopped = true;
+    try { node && node.disconnect(); } catch (_) { /* */ }
+    try { src && src.disconnect(); } catch (_) { /* */ }
+    try { stream && stream.getTracks().forEach((t) => t.stop()); } catch (_) { /* */ }
+    try { ctx && ctx.close(); } catch (_) { /* */ }
+    console.log('[hub-bridge] mic stream stopped', transID);
+  };
+  turnWS.addEventListener('close', stop);
+  turnWS.addEventListener('error', stop);
+
+  navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+    .then((s) => {
+      if (turnWS.readyState !== 1 /* OPEN */) { s.getTracks().forEach((t) => t.stop()); return; }
+      stream = s;
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      src = ctx.createMediaStreamSource(stream);
+      node = ctx.createScriptProcessor(4096, 1, 1);
+      const ratio = ctx.sampleRate / 16000;
+      let acc = [];
+      node.onaudioprocess = (ev) => {
+        if (stopped || turnWS.readyState !== 1) return;
+        const inp = ev.inputBuffer.getChannelData(0);
+        // naive decimation to 16 kHz (good enough for ASR; the robot mic does DSP on-board)
+        const outLen = Math.floor(inp.length / ratio);
+        const pcm = new Int16Array(outLen);
+        for (let i = 0; i < outLen; i += 1) {
+          const v = Math.max(-1, Math.min(1, inp[Math.floor(i * ratio)]));
+          pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+        }
+        acc.push(pcm);
+        const total = acc.reduce((n, a) => n + a.length, 0);
+        if (total >= 1600) {                 // ~100 ms at 16 kHz
+          const merged = new Int16Array(total);
+          let off = 0;
+          for (const a of acc) { merged.set(a, off); off += a.length; }
+          acc = [];
+          try { turnWS.send(merged.buffer); } catch (_) { stop(); }
+        }
+      };
+      src.connect(node);
+      node.connect(ctx.destination);        // ScriptProcessor needs a sink to fire
+      console.log('[hub-bridge] mic streaming ->', transID, 'ctxRate=', ctx.sampleRate);
+    })
+    .catch((e) => console.warn('[hub-bridge] mic denied/failed:', (e && e.message) || e));
+  return stop;
+}
+
 function bridgeViaHub(options, body, cb, reqHandlers, host) {
   const key = host + (options.port ? ':' + options.port : '');
   const reg = (typeof window !== 'undefined' && window.__hubSockets) || {};
@@ -758,12 +816,17 @@ function bridgeViaHub(options, body, cb, reqHandlers, host) {
   const emitToSkill = (obj) => { if (!eventSock) return; try { eventSock.emit('message', JSON.stringify(obj)); } catch (_) { /* */ } };
   const pending = msgs.map((m) => JSON.stringify(m));
   console.log('[hub-bridge] open', transID, 'path=', options.path, '->', proxyUrl);
+  // Audio turn = start_local_turn with neither clientASR nor clientNLU: the hub
+  // does server-side ASR, so we stream the microphone like a robot would.
+  const isAudioTurn = options.path === '/listen/start_local_turn'
+    && bodyObj.clientNLU == null && !bodyObj.clientASR;
   turnWS.onopen = () => {
     console.log('[hub-bridge] WS open', transID, 'sending', pending.length, 'msg(s)');
     for (const m of pending) {
       console.log('[hub-bridge]   ->', m.slice(0, 200));
       try { turnWS.send(m); } catch (e) { console.warn('[hub-bridge] send threw', e.message); }
     }
+    if (isAudioTurn) streamMicToWS(turnWS, transID);
     if (!isGlobal) {
       const ts = { ts: Date.now(), type: 'TURN_STARTED', transID, requestID };
       console.log('[hub-bridge] emit TURN_STARTED', transID);

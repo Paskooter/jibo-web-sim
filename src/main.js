@@ -190,6 +190,7 @@ async function startSkillRuntime() {
   // The skill's face surface: a sandboxed iframe, projected onto the screen.
   const iframe = document.createElement('iframe');
   iframe.id = 'skill-iframe';
+  iframe.allow = 'microphone';   // voice turns: the hub-bridge captures mic inside the iframe
   // allow-same-origin lets the iframe load its ES modules from our dev server;
   // the shim only ever talks to the host via postMessage, so the isolation
   // contract still holds and a true cross-origin host is a drop-in later.
@@ -216,6 +217,10 @@ async function startSkillRuntime() {
   window.addEventListener('message', (ev) => {
     const m = ev.data;
     if (!m || m.__jibo !== true) return;
+    if (m.kind === 'heard') {           // server-side ASR transcript echo
+      if (m.text) chat.addUserMessage('\u{1F3A4} ' + m.text);
+      return;
+    }
     if (m.kind === 'speak') {
       const reply = () => { try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'speak-done', id: m.id }, '*'); } catch (_) { /* gone */ } };
       if (m.text) chat.addJiboMessage(m.text);   // every spoken line shows up in Chat
@@ -351,6 +356,11 @@ async function startSkillRuntime() {
   chat.setSendHandler((text) => {
     asr.recognize(text);
     try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'utterance', text }, '*'); } catch (_) { /* iframe gone */ }
+  });
+  // Mic button -> a real robot-style audio turn (server-side ASR): the iframe's
+  // hub-bridge opens LISTEN with no mode and streams mic PCM to the gateway.
+  chat.setVoiceHandler(() => {
+    try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'voice-turn' }, '*'); } catch (_) { /* iframe gone */ }
   });
 
   // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.

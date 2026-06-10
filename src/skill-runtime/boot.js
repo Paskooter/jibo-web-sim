@@ -232,6 +232,34 @@ async function bootReal() {
     //    what the runtime does itself when a spoofed utterance arrives
     //    mid-speak. This requires the cloud; HTTP goes via BusXHR's native
     //    pass-through.
+    // Voice turn (server-side ASR): exactly the robot's audio path. LISTEN with
+    // no mode + CONTEXT go up, the hub-bridge streams mic PCM as binary frames,
+    // the gateway's VAD finds SOS/EOS, Parakeet transcribes, the hub routes.
+    // The result flows through the same global-manager turnResult machinery as
+    // any other launch turn; we additionally echo the transcript to the chat.
+    if (m.kind === 'voice-turn') {
+      const js = window.jibo && window.jibo.jetstream;
+      if (!js || typeof js.startLocalTurn !== 'function') { console.warn('[voice] jetstream unavailable'); return; }
+      try { window.parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* */ }
+      console.log('[voice] startLocalTurn audio (server-side ASR)');
+      js.startLocalTurn({ nluRules: ['launch'] })
+        .then((turn) => (turn && turn.promise) ? turn.promise : null)
+        .then((data) => {
+          if (!data || !data.result) return;
+          const heard = data.result.asr && data.result.asr.text;
+          if (heard) { try { window.parent.postMessage({ __jibo: true, kind: 'heard', text: heard }, '*'); } catch (_) { /* */ } }
+          const nlu = data.result.nlu || {};
+          if (data.result.match) return; // global-manager handles the skill switch
+          try {
+            const mim = window.jibo && window.jibo.mim;
+            if (mim && mim.handleSpeech && typeof mim.handleSpeech.emit === 'function' && nlu.intent) {
+              mim.handleSpeech.emit({ intent: nlu.intent, entities: nlu.entities || {}, rules: nlu.rules || [] });
+            }
+          } catch (e) { console.warn('[voice] handleSpeech forward:', (e && e.message) || e); }
+        })
+        .catch((e) => console.warn('[voice] turn failed:', (e && e.message) || e));
+      return;
+    }
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
       const text = m.text.trim();
       // Stop in-flight Web Speech immediately so the MIM can transition past speak.

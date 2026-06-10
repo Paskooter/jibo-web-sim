@@ -59,6 +59,25 @@ const clientNLU = (intent, entities = {}) => ({ type: 'CLIENT_NLU', msgID: 'n', 
 const clientASR = (text) => ({ type: 'CLIENT_ASR', msgID: 'n', ts: Date.now(), data: { text } });
 
 const procs = [];
+
+// Mock Parakeet /transcribe (the real one is a LAN NeMo host; the gateway only
+// needs the REST contract: multipart WAV in -> {transcript} out).
+import http from 'node:http';
+function startMockParakeet(transcript) {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        srv._lastBytes = Buffer.concat(chunks).length;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ transcript }));
+      });
+    });
+    srv.listen(0, () => resolve(srv));
+  });
+}
+
 function startGatewayStack() {
   // gateway/nlu/skills started in-process by importing the workspace packages.
   process.env.ETCO_server_hubTokenSecret = SECRET;
@@ -192,6 +211,61 @@ async function main() {
     const frames = await runTurn([listen('CLIENT_NLU'), context(), clientNLU('totallyUnknownIntent', {})], 'tid:none');
     const lr = frames.find((f) => f.type === 'LISTEN');
     check('no-match: final LISTEN with match null', lr && lr.final === true && lr.data.match === null, lr && lr.data.match);
+  }
+
+  // --- M8 server-side ASR: robot-style audio streaming -----------------------
+  // Exactly what an unmodified robot does (hub-client AudioStreamSession): LISTEN
+  // with NO mode, CONTEXT, then binary 16 kHz 16-bit mono PCM in 6400-byte chunks
+  // every 100 ms, with trailing zero (silence) chunks after the utterance until
+  // the transaction finishes. Expect REAL SOS (on VAD speech), EOS (on 700 ms
+  // silence), then the routed final LISTEN.
+  {
+    const parakeet = await startMockParakeet('what time is it');
+    process.env.ETCO_server_parakeetUrl = `http://localhost:${parakeet.address().port}`;
+
+    const pcm = (amp, ms) => {
+      const samples = Math.floor(16000 * ms / 1000);
+      const b = Buffer.alloc(samples * 2);
+      for (let i = 0; i < samples; i += 1) b.writeInt16LE((i % 2 ? 1 : -1) * amp, i * 2);
+      return b;
+    };
+    const frames = await new Promise((resolve, reject) => {
+      const url = `ws://localhost:${P.sim}/__cloud-ws?upstream=${encodeURIComponent(`localhost:${P.gateway}`)}&path=${encodeURIComponent('/listen')}&transID=${encodeURIComponent('tid:audio')}`;
+      const ws = new WebSocket(url);
+      const got = [];
+      const timer = setTimeout(() => { ws.close(); reject(new Error('audio turn timeout')); }, 15000);
+      let pump = null;
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'LISTEN', msgID: 'l', ts: Date.now(), data: { lang: 'en-US', hotphrase: false, rules: ['launch'] } }));
+        ws.send(JSON.stringify(context()));
+        // utterance: 300ms silence, 600ms speech, then endless trailing silence
+        const schedule = [pcm(0, 100), pcm(0, 100), pcm(0, 100),
+          pcm(8000, 100), pcm(8000, 100), pcm(8000, 100), pcm(8000, 100), pcm(8000, 100), pcm(8000, 100)];
+        let i = 0;
+        pump = setInterval(() => {
+          const chunk = i < schedule.length ? schedule[i] : pcm(0, 200); // hub-client chunks are 6400B = 200ms
+          i += 1;
+          try { ws.send(chunk, { binary: true }); } catch { /* closing */ }
+        }, 100);
+      });
+      ws.on('message', (d, isBinary) => {
+        if (isBinary) return;
+        const m = JSON.parse(d.toString());
+        got.push(m);
+        if (m.final) { clearInterval(pump); clearTimeout(timer); ws.close(); resolve(got); }
+      });
+      ws.on('error', (e) => { clearInterval(pump); clearTimeout(timer); reject(e); });
+    });
+    parakeet.close();
+    delete process.env.ETCO_server_parakeetUrl;
+
+    const types = frames.map((f) => f.type);
+    check('audio: SOS/EOS/LISTEN stream from real VAD', JSON.stringify(types) === JSON.stringify(['SOS', 'EOS', 'LISTEN']), types);
+    const sos = frames.find((f) => f.type === 'SOS');
+    check('audio: SOS carries REAL timing (not -1)', sos && sos.timings && sos.timings.total >= 0, sos && sos.timings);
+    const lr = frames.find((f) => f.type === 'LISTEN');
+    check('audio: transcript routed to @be/clock', lr && lr.final === true && lr.data.match && lr.data.match.skillID === '@be/clock', lr && lr.data && lr.data.match);
+    check('audio: ASR transcript in the LISTEN result', lr && lr.data.asr && lr.data.asr.text === 'what time is it', lr && lr.data && lr.data.asr);
   }
 
   // --- multi-turn GraphSkill: color-skill (LISTEN_LAUNCH final:false -> LISTEN_UPDATE) ----
