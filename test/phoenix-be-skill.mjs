@@ -158,6 +158,25 @@ async function main() {
     check(`CLIENT_ASR "${text}" -> ${skillId} SKILL_ACTION`, act && act.data && act.data.skill && act.data.skill.id === skillId, act && act.data && act.data.skill);
   }
 
+  // --- report intent split: news/weather requests must NOT speak the personal report ----
+  // (mirrors reference IntentSplitNode: requestNews -> news only, requestWeatherPR -> weather only)
+  for (const [text, mustNotMatch] of [['tell me the news', /personal report/i], ['tell me the weather', /personal report/i]]) {
+    const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:split:${text.replace(/\s+/g, '_')}`);
+    const act = frames.find((f) => f.type === 'SKILL_ACTION');
+    const esml = act && act.data.action && act.data.action.config.jcp.children[0].config.play.esml || '';
+    check(`CLIENT_ASR "${text}" -> report-skill subskill (not the full report)`,
+      act && act.data.skill.id === 'report-skill' && !mustNotMatch.test(esml), { skill: act && act.data.skill.id, esml });
+  }
+
+  // --- chitchat intent responses: dance/twerk answer with real MIM content ----
+  for (const [text, esmlRe] of [['do a dance', /<anim cat='dance'/], ['twerk', /twerk/i]]) {
+    const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:cc:${text.replace(/\s+/g, '_')}`);
+    const act = frames.find((f) => f.type === 'SKILL_ACTION');
+    const esml = act && act.data.action && act.data.action.config.jcp.children[0].config.play.esml || '';
+    check(`CLIENT_ASR "${text}" -> chitchat-skill responds in character`,
+      act && act.data.skill.id === 'chitchat-skill' && esmlRe.test(esml), { skill: act && act.data.skill.id, esml: esml.slice(0, 120) });
+  }
+
   // --- global turn: bare CLIENT_NLU, no LISTEN/CONTEXT (mimic_global_turn) ----
   {
     const frames = await runTurn([clientNLU('askForTime', { skill: '@be/clock' })], 'GLOBAL');
