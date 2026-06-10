@@ -743,6 +743,7 @@ function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
 // (hub-client AudioStreamSession ships 6400 B/100 ms; mic capture is realtime so
 // our frames are ~3200 B/100 ms — same wire format, same VAD behavior.)
 function streamMicToWS(turnWS, transID) {
+  console.log('[hub-bridge] mic capture starting', transID, 'mediaDevices=', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     console.warn('[hub-bridge] mic unavailable (getUserMedia missing)');
     return;
@@ -759,7 +760,7 @@ function streamMicToWS(turnWS, transID) {
   turnWS.addEventListener('close', stop);
   turnWS.addEventListener('error', stop);
 
-  navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+  navigator.mediaDevices.getUserMedia({ audio: true })
     .then((s) => {
       if (turnWS.readyState !== 1 /* OPEN */) { s.getTracks().forEach((t) => t.stop()); return; }
       stream = s;
