@@ -132,7 +132,10 @@ async function main() {
   {
     const cases = [
       ['what time is it', '@be/clock'],
-      ['what is the date today', '@be/clock'],
+      // NOTE: today-suffixed variants ("what is the date today") go to GQA in the
+      // REFERENCE too (oracle: "what day is it today" -> generalWhatQuestions);
+      // the bare form is the clock-owned phrasing.
+      ['what is the date', '@be/clock'],
       ['hello jibo', '@be/greetings'],
       ['im home', '@be/greetings'],
       ['who am i', '@be/who-am-i'],
