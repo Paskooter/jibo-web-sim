@@ -742,10 +742,17 @@ function _translateHubMsg(hubMsg, transID, requestID, isGlobal) {
 // 16 kHz 16-bit mono PCM, binary frames every ~100 ms, until the turn finishes.
 // (hub-client AudioStreamSession ships 6400 B/100 ms; mic capture is realtime so
 // our frames are ~3200 B/100 ms — same wire format, same VAD behavior.)
+function _voiceError(message) {
+  console.warn('[hub-bridge] ' + message);
+  try { window.parent.postMessage({ __jibo: true, kind: 'voice-error', message }, '*'); } catch (_) { /* */ }
+}
+
 function streamMicToWS(turnWS, transID) {
   console.log('[hub-bridge] mic capture starting', transID, 'mediaDevices=', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    console.warn('[hub-bridge] mic unavailable (getUserMedia missing)');
+    _voiceError(window.isSecureContext
+      ? 'Microphone unavailable: this browser has no getUserMedia support.'
+      : 'Microphone blocked: the page is not a secure context. Open the sim via https:// or http://localhost (e.g. an SSH tunnel), not a bare http://<ip> URL.');
     return;
   }
   let ctx = null; let stream = null; let node = null; let src = null; let stopped = false;
@@ -760,24 +767,55 @@ function streamMicToWS(turnWS, transID) {
   turnWS.addEventListener('close', stop);
   turnWS.addEventListener('error', stop);
 
-  navigator.mediaDevices.getUserMedia({ audio: true })
+  // Real-mic constraints: mono + the browser's speech DSP (the robot does the
+  // equivalent on-board). Ideal-value constraints never cause rejection.
+  const constraints = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
+  navigator.mediaDevices.getUserMedia(constraints)
     .then((s) => {
       if (turnWS.readyState !== 1 /* OPEN */) { s.getTracks().forEach((t) => t.stop()); return; }
       stream = s;
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      src = ctx.createMediaStreamSource(stream);
+      const AC = window.AudioContext || window.webkitAudioContext;
+      // Prefer a 16 kHz context: the browser then resamples the device input
+      // with a proper polyphase filter and we ship samples verbatim. Fall back
+      // to the default rate + our own box-filter decimation (cheap anti-alias)
+      // for engines that can't mix a device stream into a 16 kHz graph.
+      try {
+        ctx = new AC({ sampleRate: 16000 });
+        src = ctx.createMediaStreamSource(stream);
+      } catch (_) {
+        try { ctx && ctx.close(); } catch (_2) { /* */ }
+        ctx = new AC();
+        src = ctx.createMediaStreamSource(stream);
+      }
       node = ctx.createScriptProcessor(4096, 1, 1);
       const ratio = ctx.sampleRate / 16000;
       let acc = [];
+      let pos = 0;                            // fractional read head into the input timeline
       node.onaudioprocess = (ev) => {
         if (stopped || turnWS.readyState !== 1) return;
         const inp = ev.inputBuffer.getChannelData(0);
-        // naive decimation to 16 kHz (good enough for ASR; the robot mic does DSP on-board)
-        const outLen = Math.floor(inp.length / ratio);
-        const pcm = new Int16Array(outLen);
-        for (let i = 0; i < outLen; i += 1) {
-          const v = Math.max(-1, Math.min(1, inp[Math.floor(i * ratio)]));
-          pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+        let pcm;
+        if (ratio === 1) {
+          pcm = new Int16Array(inp.length);
+          for (let i = 0; i < inp.length; i += 1) {
+            const v = Math.max(-1, Math.min(1, inp[i]));
+            pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+          }
+        } else {
+          // Box-filter resample: each output sample averages its source window
+          // [pos, pos+ratio) — a crude low-pass that kills most aliasing that
+          // plain pick-every-Nth decimation would fold into the speech band.
+          const out = [];
+          while (pos + ratio <= inp.length) {
+            const a = Math.floor(pos); const b = Math.floor(pos + ratio);
+            let sum = 0;
+            for (let i = a; i < b; i += 1) sum += inp[i];
+            const v = Math.max(-1, Math.min(1, sum / (b - a)));
+            out.push(v < 0 ? v * 0x8000 : v * 0x7fff);
+            pos += ratio;
+          }
+          pos = Math.max(0, pos - inp.length); // carry the fractional remainder
+          pcm = Int16Array.from(out);
         }
         acc.push(pcm);
         const total = acc.reduce((n, a) => n + a.length, 0);
@@ -791,9 +829,17 @@ function streamMicToWS(turnWS, transID) {
       };
       src.connect(node);
       node.connect(ctx.destination);        // ScriptProcessor needs a sink to fire
+      try { ctx.resume(); } catch (_) { /* */ }
       console.log('[hub-bridge] mic streaming ->', transID, 'ctxRate=', ctx.sampleRate);
     })
-    .catch((e) => console.warn('[hub-bridge] mic denied/failed:', (e && e.message) || e));
+    .catch((e) => {
+      const name = (e && e.name) || '';
+      _voiceError(name === 'NotAllowedError'
+        ? 'Microphone permission denied — allow mic access for this site and try again.'
+        : name === 'NotFoundError'
+          ? 'No microphone found on this machine.'
+          : `Microphone failed: ${(e && e.message) || e}`);
+    });
   return stop;
 }
 

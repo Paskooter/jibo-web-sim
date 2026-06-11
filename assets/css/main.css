@@ -220,6 +220,14 @@ body {
   border: 1px solid var(--border);
   border-bottom-left-radius: 3px;
 }
+.chat-system {
+  align-self: center;
+  background: transparent;
+  color: var(--fg-dim, #999);
+  border: 1px dashed var(--border);
+  font-size: 12px;
+  font-style: italic;
+}
 .chat-input {
   display: flex;
   gap: 8px;

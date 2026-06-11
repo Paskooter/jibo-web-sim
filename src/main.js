@@ -204,6 +204,7 @@ async function startSkillRuntime() {
   // when it ends so the skill paces to real speech. Keep utterance refs alive to
   // dodge a known Chromium GC-cancels-speech bug.
   const synth = window.speechSynthesis;
+  let voiceDone = null;                 // resolver releasing the mic button when the voice turn settles
   const liveUtters = new Set();
   // id (from iframe's play-sound) -> Audio element currently playing in
   // the host. Lets 'stop-sound' (sent on animation cancel/preempt) find
@@ -219,6 +220,14 @@ async function startSkillRuntime() {
     if (!m || m.__jibo !== true) return;
     if (m.kind === 'heard') {           // server-side ASR transcript echo
       if (m.text) chat.addUserMessage('\u{1F3A4} ' + m.text);
+      return;
+    }
+    if (m.kind === 'voice-error') {     // mic/ASR problems, made visible
+      if (m.message) chat.addSystemMessage('\u{1F3A4} ' + m.message);
+      return;
+    }
+    if (m.kind === 'voice-done') {      // turn settled -> release the mic button
+      if (voiceDone) { const d = voiceDone; voiceDone = null; d(); }
       return;
     }
     if (m.kind === 'speak') {
@@ -359,8 +368,21 @@ async function startSkillRuntime() {
   });
   // Mic button -> a real robot-style audio turn (server-side ASR): the iframe's
   // hub-bridge opens LISTEN with no mode and streams mic PCM to the gateway.
+  // The returned promise holds the ⏺ recording indicator until the turn settles
+  // (voice-done from the iframe), with a timeout backstop.
   chat.setVoiceHandler(() => {
-    try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'voice-turn' }, '*'); } catch (_) { /* iframe gone */ }
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      chat.addSystemMessage(window.isSecureContext
+        ? '\u{1F3A4} This browser has no microphone API.'
+        : '\u{1F3A4} Mic needs a secure context: open the sim via https:// or http://localhost (e.g. ssh -L 8080:localhost:8080), not http://<ip>.');
+      return;
+    }
+    return new Promise((resolve) => {
+      voiceDone = resolve;
+      setTimeout(() => { if (voiceDone === resolve) { voiceDone = null; resolve(); } }, 60000);
+      try { iframe.contentWindow.postMessage({ __jibo: true, kind: 'voice-turn' }, '*'); }
+      catch (_) { voiceDone = null; resolve(); }
+    });
   });
 
   // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.

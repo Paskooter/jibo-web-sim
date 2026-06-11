@@ -70,5 +70,6 @@ export function installChatPanel(panelEl) {
     setPlaceholder: (text) => { if (text) input.placeholder = text; },
     addUserMessage: (text) => addMessage('user', text),
     addJiboMessage: (text) => addMessage('jibo', text),
+    addSystemMessage: (text) => addMessage('system', text),
   };
 }

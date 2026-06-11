@@ -5,10 +5,12 @@ import express from 'express';
 import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 // Cloud hub auth: the hub accepts a Bearer JWT signed with HS256. The secret
 // and credential identifiers are fully configurable via env vars — any
@@ -233,6 +235,39 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`jibo-web-sim dev server listening on http://${HOST}:${PORT}/`);
 });
 
+// Optional HTTPS listener: getUserMedia (the 🎤 voice path) only exists in a
+// secure context, and http://<lan-ip>:8080 is not one — only localhost and
+// https origins are. HTTPS=1 (or HTTPS_PORT=<n>) serves the same app + WS
+// proxy on HTTPS_PORT (default 8443) with a self-signed cert, auto-generated
+// via the openssl CLI with SANs for localhost and every local IPv4 address.
+// Browsers show a one-time "not private" interstitial for self-signed certs;
+// proceed past it once and the mic works.
+let httpsServer = null;
+if (process.env.HTTPS === '1' || process.env.HTTPS_PORT) {
+  const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 8443;
+  const certDir = join(__dirname, '.https-cert');
+  const keyPath = process.env.HTTPS_KEY || join(certDir, 'key.pem');
+  const certPath = process.env.HTTPS_CERT || join(certDir, 'cert.pem');
+  try {
+    if (!existsSync(keyPath) || !existsSync(certPath)) {
+      const sans = ['DNS:localhost', 'IP:127.0.0.1'];
+      for (const ifaces of Object.values(os.networkInterfaces())) {
+        for (const i of ifaces || []) if (i.family === 'IPv4' && !i.internal) sans.push(`IP:${i.address}`);
+      }
+      mkdirSync(certDir, { recursive: true });
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyPath, '-out', certPath,
+        '-days', '825', '-nodes', '-subj', '/CN=jibo-web-sim', '-addext', `subjectAltName=${sans.join(',')}`], { stdio: 'ignore' });
+      console.log(`generated self-signed cert for ${sans.join(' ')} in ${certDir}`);
+    }
+    httpsServer = https.createServer({ key: readFileSync(keyPath), cert: readFileSync(certPath) }, app);
+    httpsServer.listen(HTTPS_PORT, HOST, () => {
+      console.log(`jibo-web-sim HTTPS (mic-capable) listening on https://${HOST}:${HTTPS_PORT}/`);
+    });
+  } catch (e) {
+    console.warn(`HTTPS listener disabled: ${e.message} (is the openssl CLI installed?)`);
+  }
+}
+
 // WebSocket proxy to the cloud hub. Browsers can't set custom WS-upgrade headers
 // (the hub requires X-JIBO-transID per connection and uses a new socket per
 // turn), so the browser opens
@@ -240,7 +275,7 @@ const server = app.listen(PORT, HOST, () => {
 // and the server upgrades both sides and pipes frames between them, injecting
 // the X-JIBO-transID / X-JIBO-robotID headers on the upstream handshake.
 const wss = new WebSocketServer({ noServer: true });
-server.on('upgrade', (req, sock, head) => {
+const onUpgrade = (req, sock, head) => {
   if (!req.url || !req.url.startsWith('/__cloud-ws')) { sock.destroy(); return; }
   const u = new URL(req.url, 'http://x');
   const upstream = u.searchParams.get('upstream');
@@ -274,4 +309,6 @@ server.on('upgrade', (req, sock, head) => {
     upstreamWS.on('error', (e) => { try { clientWS.send(JSON.stringify({ type: 'ERROR', data: { message: 'upstream WS error: ' + e.message } })); } catch (_) {} cleanup(); });
     clientWS.on('error', cleanup);
   });
-});
+};
+server.on('upgrade', onUpgrade);
+if (httpsServer) httpsServer.on('upgrade', onUpgrade);

@@ -238,16 +238,29 @@ async function bootReal() {
     // The result flows through the same global-manager turnResult machinery as
     // any other launch turn; we additionally echo the transcript to the chat.
     if (m.kind === 'voice-turn') {
+      const post = (msg) => { try { window.parent.postMessage({ __jibo: true, ...msg }, '*'); } catch (_) { /* */ } };
       const js = window.jibo && window.jibo.jetstream;
-      if (!js || typeof js.startLocalTurn !== 'function') { console.warn('[voice] jetstream unavailable'); return; }
-      try { window.parent.postMessage({ __jibo: true, kind: 'speak-stop' }, '*'); } catch (_) { /* */ }
+      if (!js || typeof js.startLocalTurn !== 'function') {
+        console.warn('[voice] jetstream unavailable');
+        post({ kind: 'voice-error', message: 'Voice turn unavailable: skill runtime not connected to the hub yet.' });
+        post({ kind: 'voice-done' });
+        return;
+      }
+      post({ kind: 'speak-stop' });
       console.log('[voice] startLocalTurn audio (server-side ASR)');
       js.startLocalTurn({ nluRules: ['launch'] })
         .then((turn) => (turn && turn.promise) ? turn.promise : null)
         .then((data) => {
           if (!data || !data.result) return;
           const heard = data.result.asr && data.result.asr.text;
-          if (heard) { try { window.parent.postMessage({ __jibo: true, kind: 'heard', text: heard }, '*'); } catch (_) { /* */ } }
+          if (heard) post({ kind: 'heard', text: heard });
+          const ann = data.result.asr && data.result.asr.annotation;
+          if (!heard && ann) {
+            const why = { GARBAGE: "Heard you, but couldn't make out any words.",
+              SOS_TIMEOUT: 'No speech detected — check the mic level and try again.',
+              MAX_SPEECH_TIMEOUT: 'Speech ran too long; the turn was cut off.' }[ann] || `ASR annotation: ${ann}`;
+            post({ kind: 'voice-error', message: why });
+          }
           const nlu = data.result.nlu || {};
           if (data.result.match) return; // global-manager handles the skill switch
           try {
@@ -257,7 +270,11 @@ async function bootReal() {
             }
           } catch (e) { console.warn('[voice] handleSpeech forward:', (e && e.message) || e); }
         })
-        .catch((e) => console.warn('[voice] turn failed:', (e && e.message) || e));
+        .catch((e) => {
+          console.warn('[voice] turn failed:', (e && e.message) || e);
+          post({ kind: 'voice-error', message: `Voice turn failed: ${(e && e.message) || e}` });
+        })
+        .then(() => post({ kind: 'voice-done' }));
       return;
     }
     if (m.kind === 'utterance' && typeof m.text === 'string' && m.text.trim()) {
