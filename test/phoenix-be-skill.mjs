@@ -138,12 +138,17 @@ async function main() {
   }
 
   // --- cloud report-skill + chitchat-skill (distinct hosted skills) ----------
-  for (const [intent, skillId] of [['launchPersonalReport', 'report-skill'], ['aprilFools', 'chitchat-skill']]) {
+  // report-skill is the PersonalReport graph now: launching the full report with no
+  // perception.speaker asks WhoIsThis first (a non-final QN, reference behavior).
+  for (const [intent, skillId, fin] of [['launchPersonalReport', 'report-skill', false], ['aprilFools', 'chitchat-skill', true]]) {
     const frames = await runTurn([listen('CLIENT_NLU'), context(), clientNLU(intent, {})], `tid:${skillId}`);
     const lr = frames.find((f) => f.type === 'LISTEN');
     const act = frames.find((f) => f.type === 'SKILL_ACTION');
     check(`cloud: "${intent}" -> ${skillId} match`, lr && lr.data.match && lr.data.match.skillID === skillId, lr && lr.data && lr.data.match);
-    check(`cloud: ${skillId} returns its own SKILL_ACTION`, act && act.final === true && act.data.skill.id === skillId && act.data.action.config.jcp.type === 'SEQUENCE', act && act.data && act.data.skill);
+    // Envelope final is always true for forwarded skill results (the LISTEN transaction is
+    // over); the SKILL session's continuation is signaled by data.final.
+    const jcpType = act && act.data.action && act.data.action.config.jcp.type;
+    check(`cloud: ${skillId} returns its own SKILL_ACTION (data.final=${fin})`, act && act.data.final === fin && act.data.skill.id === skillId && (jcpType === 'SEQUENCE' || jcpType === 'SLIM'), act && { dataFinal: act.data.final, jcpType });
   }
 
   // --- be-skills via raw CLIENT_ASR (the real browser path: gateway does NLU) ----
