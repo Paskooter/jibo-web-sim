@@ -58,6 +58,12 @@ const listen = (mode) => ({ type: 'LISTEN', msgID: 'l', ts: Date.now(), data: { 
 const clientNLU = (intent, entities = {}) => ({ type: 'CLIENT_NLU', msgID: 'n', ts: Date.now(), data: { rules: ['launch'], intent, entities } });
 const clientASR = (text) => ({ type: 'CLIENT_ASR', msgID: 'n', ts: Date.now(), data: { text } });
 
+const firstSlimEsml = (act) => {
+  const jcp = act && act.data.action && act.data.action.config.jcp;
+  if (!jcp) return '';
+  const slim = jcp.type === 'SLIM' ? jcp : (jcp.children || []).find((c) => c.type === 'SLIM');
+  return (slim && slim.config.play && slim.config.play.esml) || '';
+};
 const procs = [];
 
 // Mock Parakeet /transcribe (the real one is a LAN NeMo host; the gateway only
@@ -190,7 +196,7 @@ async function main() {
   for (const [text, mustNotMatch] of [['tell me the news', /personal report/i], ['tell me the weather', /personal report/i]]) {
     const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:split:${text.replace(/\s+/g, '_')}`);
     const act = frames.find((f) => f.type === 'SKILL_ACTION');
-    const esml = act && act.data.action && act.data.action.config.jcp.children[0].config.play.esml || '';
+    const esml = firstSlimEsml(act);
     check(`CLIENT_ASR "${text}" -> report-skill subskill (not the full report)`,
       act && act.data.skill.id === 'report-skill' && !mustNotMatch.test(esml), { skill: act && act.data.skill.id, esml });
   }
@@ -199,7 +205,7 @@ async function main() {
   for (const [text, esmlRe] of [['do a dance', /<anim cat='dance'/], ['twerk', /twerk/i]]) {
     const frames = await runTurn([listen('CLIENT_ASR'), context(), clientASR(text)], `tid:cc:${text.replace(/\s+/g, '_')}`);
     const act = frames.find((f) => f.type === 'SKILL_ACTION');
-    const esml = act && act.data.action && act.data.action.config.jcp.children[0].config.play.esml || '';
+    const esml = firstSlimEsml(act);
     check(`CLIENT_ASR "${text}" -> chitchat-skill responds in character`,
       act && act.data.skill.id === 'chitchat-skill' && esmlRe.test(esml), { skill: act && act.data.skill.id, esml: esml.slice(0, 120) });
   }
@@ -285,7 +291,7 @@ async function main() {
     const ctx2 = { type: 'CONTEXT', msgID: 'c2', ts: Date.now(), data: { general: { release: '1.9.0' }, runtime: { loop: { users: [] }, dialog: {}, perception: {} }, skill: { id: 'color-skill', session } } };
     const t2 = await runTurn([listen('CLIENT_ASR'), ctx2, clientASR('blue')], 'tid:color2');
     const act2 = t2.find((f) => f.type === 'SKILL_ACTION');
-    const esml2 = act2 && act2.data.action && act2.data.action.config.jcp.children[0].config.play.esml;
+    const esml2 = firstSlimEsml(act2);
     check('multi-turn t2: LISTEN_UPDATE resumes -> final SKILL_ACTION mentioning "blue"', act2 && act2.data.final === true && /blue/.test(esml2 || ''), { final: act2 && act2.data.final, esml: esml2 });
   }
 
