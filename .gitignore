@@ -2,6 +2,9 @@
 node_modules/
 .https-cert/
 .cache/
+
+# Unpacked robot bundle from the archive (643 MB) — drop-in, not part of the sim
+skills/jibo-be/
 .vscode/
 *.log
 
