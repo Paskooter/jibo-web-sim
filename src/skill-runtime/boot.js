@@ -100,7 +100,11 @@ const dir = (params.get('dir') || '/skills/hello-world').replace(/\/$/, '');
 const entry = params.get('entry') || 'index.html';
 // Optional cloud backend, set in the host UI. Exposed for the runtime/services
 // to route cloud requests at.
-const server = (params.get('server') || '').trim();
+// The sim is the robot's CONVERSATIONAL client — it always talks to the cloud hub on :9000
+// (the runtime hardcodes that port). The Server field is therefore a bare host/IP; strip any
+// `:port` a user typed (e.g. a copy-pasted :9012 classic-entrypoint port) so we don't build a
+// malformed `host:port:9000`. IPv6 in brackets is left alone.
+const server = (params.get('server') || '').trim().replace(/(?<!:):\d+$/, '');
 if (server) window.__JIBO_SERVER__ = server;
 
 // Run the bundle's index.html: inject its styles + body DOM, then run its scripts
