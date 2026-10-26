@@ -11,6 +11,7 @@ export const DEFAULTS = {
   viewport: {
     background: '#0b0e12',   // 3D scene backdrop
     floorColor: '#141a22',   // the faint disc under Jibo
+    ledColor: '#4ec9ff',     // Jibo's LED ring at load and after "Reset pose & LEDs"
   },
 };
 
@@ -20,6 +21,7 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 const FORMATS = {
   'viewport.background': [HEX_COLOR, 'a #rrggbb colour'],
   'viewport.floorColor': [HEX_COLOR, 'a #rrggbb colour'],
+  'viewport.ledColor': [HEX_COLOR, 'a #rrggbb colour'],
 };
 const badFormat = (path, v) => { const f = FORMATS[path]; return f && !f[0].test(v) ? f[1] : null; };
 

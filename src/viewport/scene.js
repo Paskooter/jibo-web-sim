@@ -8,7 +8,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createJiboRig } from './jibo.js';
 
 // `opts` carries the persisted viewport settings (colours as '#rrggbb').
-export function createViewport(hostEl, { background = '#0b0e12', floorColor = '#141a22' } = {}) {
+export function createViewport(hostEl, { background = '#0b0e12', floorColor = '#141a22', ledColor = '#4ec9ff' } = {}) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(background);
 
@@ -103,7 +103,7 @@ export function createViewport(hostEl, { background = '#0b0e12', floorColor = '#
   floor.position.y = 0;
   scene.add(floor);
 
-  const rig = createJiboRig(scene);
+  const rig = createJiboRig(scene, { ledColor: parseInt(ledColor.slice(1), 16) });
 
   // Resize handling. Pass updateStyle=true (the default) so the canvas's CSS
   // width/height are pinned to w×h CSS pixels — without this, on a high-DPR

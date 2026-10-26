@@ -57,7 +57,7 @@ const get = async () => (await fetch(base + '/__settings')).json();
 const initial = await get();
 check('file created with defaults on first start', existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).wakeWord === false);
 check('GET returns defaults', initial.wakeWord === false && initial.server === '' && initial.skill === '');
-check('viewport defaults are the original colours', initial.viewport.background === '#0b0e12' && initial.viewport.floorColor === '#141a22');
+check('viewport defaults are the original colours', initial.viewport.background === '#0b0e12' && initial.viewport.floorColor === '#141a22' && initial.viewport.ledColor === '#4ec9ff');
 
 let r = await put({ wakeWord: true, server: 'hub.local' });
 check('PUT partial update -> 200', r.status === 200);
@@ -67,6 +67,8 @@ check('file on disk updated', JSON.parse(readFileSync(file, 'utf8')).server === 
 
 r = await put({ nope: 1 });
 check('unknown key -> 400', r.status === 400);
+r = await put({ viewport: { ledColor: '#abc' } });
+check('short hex LED colour -> 400', r.status === 400);
 r = await put({ viewport: { background: 'red' } });
 check('bad colour format -> 400', r.status === 400);
 r = await put({ viewport: { floorColor: '#112233' } });
@@ -92,7 +94,7 @@ const partialView = await (async () => {
   return (await get()).viewport;
 })();
 check('bad nested colour dropped, good one kept', partialView.background === '#336699' && partialView.floorColor === '#141a22');
-writeFileSync(file, JSON.stringify({ wakeWord: true, skill: 'no-such-skill', viewport: { background: '#336699' } }));
+writeFileSync(file, JSON.stringify({ wakeWord: true, skill: 'no-such-skill', viewport: { background: '#336699', ledColor: '#ff8800' } }));
 const browser = await puppeteer.launch({
   headless: true,
   executablePath: findChrome(),
@@ -135,6 +137,10 @@ try {
     return Array.from(g.getImageData(2, 2, 1, 1).data.slice(0, 3));
   });
   check('saved viewport.background is rendered', px.join() === '51,102,153', `got rgb(${px})`);
+
+  // The Rig tab's LED picker starts at the saved ring colour.
+  const led = await page.evaluate(() => document.getElementById('rig-led-color')?.value);
+  check('saved viewport.ledColor seeds the LED ring + picker', led === '#ff8800', `got ${led}`);
 
   // Start Jibo loads the saved skill into the iframe; an unknown one must fall
   // back to a real bundle (the picker itself can never hold an unknown value).
