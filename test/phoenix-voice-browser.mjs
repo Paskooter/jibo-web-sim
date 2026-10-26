@@ -7,10 +7,16 @@
 // Env:  PHOENIX_DIR, SECRET, HEADFUL=1, WAIT_MS
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
+
+// Fresh settings file per run (removed on exit): a fixed path would carry the
+// previous run's saved server/skill into this one.
+const SETTINGS_DIR = mkdtempSync(`${tmpdir()}/jibo-sim-settings-`);
+process.on('exit', () => rmSync(SETTINGS_DIR, { recursive: true, force: true }));
 
 const PHOENIX_DIR = process.env.PHOENIX_DIR || '/home/shell/work/phoenix';
 const SECRET = process.env.SECRET || 'phx-it-secret';
@@ -95,7 +101,7 @@ async function startGatewayStack(parakeetUrl) {
 function startSim() {
   const child = spawn('node', ['server.js'], {
     cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, PORT: String(P.sim), HUB_AUTH_SECRET: SECRET },
+    env: { ...process.env, PORT: String(P.sim), HUB_AUTH_SECRET: SECRET, SETTINGS_FILE: `${SETTINGS_DIR}/settings.json` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   procs.push(child);

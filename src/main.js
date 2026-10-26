@@ -27,6 +27,7 @@ import { createNotificationsService } from './bridge/services/notifications-serv
 import { createMediaService } from './bridge/services/media-service.js';
 import { loadSkillManifest } from './skill-runtime/skill-loader.js';
 import { createWakeWord } from './skill-runtime/wake-word.js';
+import { loadSettings, saveSettings } from './settings.js';
 
 // Skill bundles are discovered at boot by listing the /skills tree and
 // keeping every immediate subdirectory that has a package.json — the picker
@@ -55,6 +56,18 @@ async function discoverSkills() {
     return sorted;
   } catch (_) { return []; }
 }
+
+// Persisted user settings (settings.json via /__settings). Loaded before any UI
+// is built so controls come up in their saved state.
+const settings = await loadSettings();
+// One-time migration of the old per-origin localStorage server address.
+try {
+  const legacy = (localStorage.getItem('jibo-server') || '').trim();
+  if (legacy) {
+    if (!settings.server) { settings.server = legacy; saveSettings({ server: legacy }); }
+    localStorage.removeItem('jibo-server');
+  }
+} catch (_) { /* storage blocked */ }
 
 const viewportEl = document.getElementById('viewport');
 const statusEl = document.getElementById('status');
@@ -93,10 +106,11 @@ installNotificationsPanel(panelsEl.querySelector('[data-panel="notes"]'), {
 // iframe so the runtime can route cloud requests there. Changing it reloads
 // the current skill so the new address takes effect.
 const serverInput = document.getElementById('server-addr');
-const getServer = () => (localStorage.getItem('jibo-server') || '').trim();
+const getServer = () => settings.server.trim();
 serverInput.value = getServer();
 serverInput.addEventListener('change', () => {
-  localStorage.setItem('jibo-server', serverInput.value.trim());
+  settings.server = serverInput.value.trim();
+  saveSettings({ server: settings.server });
   if (switchSkill && skillPicker.value) switchSkill(skillPicker.value);
 });
 
@@ -118,7 +132,43 @@ const skillsReady = (async () => {
     } catch (err) { console.error('skill manifest load failed:', dir, err); }
   }
 })();
-skillPicker.addEventListener('change', () => switchSkill(skillPicker.value));
+skillPicker.addEventListener('change', () => {
+  settings.skill = skillPicker.value;
+  saveSettings({ skill: settings.skill });
+  switchSkill(skillPicker.value);
+});
+
+// "Hey Jibo" wake word: an always-on, fully on-device detector (openWakeWord
+// models run via onnxruntime-web — mic audio never leaves the browser). It's
+// opt-in: the topbar toggle starts it, or the saved wakeWord setting does at
+// page load (before Start Jibo — a detection then no-ops until the voice
+// handler exists, see chat.triggerVoice).
+// On detection we just press the same path the mic button does, so the wake
+// phrase fires a real server-side voice turn with the blue listening cue.
+const wakeToggle = document.getElementById('wake-toggle');
+if (wakeToggle) {
+  const wake = createWakeWord({
+    onWake: () => {
+      // triggerVoice() no-ops if a turn is already in flight, so a stray
+      // re-detection mid-turn won't stack a second capture.
+      if (chat.triggerVoice()) chat.addSystemMessage('\u{1F3A4} “Hey Jibo” — listening…');
+    },
+    onStatus: (s) => {
+      if (s && s.error) { chat.addSystemMessage('\u{1F3A4} Wake word: ' + s.error); wakeToggle.checked = false; }
+      else if (s && s.phrase) wakeToggle.title = `Always-on wake word active: "${s.phrase}"`;
+    },
+  });
+  wakeToggle.addEventListener('change', () => {
+    settings.wakeWord = wakeToggle.checked;
+    saveSettings({ wakeWord: settings.wakeWord });
+    if (wakeToggle.checked) wake.start();
+    else wake.stop();
+  });
+  // Saved as on: arm now rather than waiting for a click. A failed start
+  // (mic denied, no model) unticks the box via onStatus but leaves the saved
+  // preference alone, so a transient failure doesn't switch it off for good.
+  if (settings.wakeWord) { wakeToggle.checked = true; wake.start(); }
+}
 
 // Subtitle bar over the viewport (TTS output).
 const subtitleEl = document.createElement('div');
@@ -420,30 +470,9 @@ async function startSkillRuntime() {
     });
   });
 
-  // "Hey Jibo" wake word: an always-on, fully on-device detector (openWakeWord
-  // models run via onnxruntime-web — mic audio never leaves the browser). It's
-  // opt-in (the topbar toggle is the user gesture that grants mic + starts it).
-  // On detection we just press the same path the mic button does, so the wake
-  // phrase fires a real server-side voice turn with the blue listening cue.
-  const wakeToggle = document.getElementById('wake-toggle');
-  if (wakeToggle) {
-    const wake = createWakeWord({
-      onWake: () => {
-        // triggerVoice() no-ops if a turn is already in flight, so a stray
-        // re-detection mid-turn won't stack a second capture.
-        if (chat.triggerVoice()) chat.addSystemMessage('\u{1F3A4} “Hey Jibo” — listening…');
-      },
-      onStatus: (s) => {
-        if (s && s.error) { chat.addSystemMessage('\u{1F3A4} Wake word: ' + s.error); wakeToggle.checked = false; }
-        else if (s && s.phrase) wakeToggle.title = `Always-on wake word active: "${s.phrase}"`;
-      },
-    });
-    wakeToggle.disabled = false;
-    wakeToggle.addEventListener('change', () => {
-      if (wakeToggle.checked) wake.start();
-      else wake.stop();
-    });
-  }
+  // The toggle stays disabled (index.html) until the runtime is up; a saved
+  // wakeWord has already armed the detector at page load.
+  if (wakeToggle) wakeToggle.disabled = false;
 
   // jibo.animate: keyframed gestures driving the rig (body + LED) and eye.
   const animation = createAnimationService({
@@ -682,7 +711,9 @@ async function startSkillRuntime() {
   // Wait for the picker to finish probing manifests, then pick the first
   // one that actually loaded.
   skillsReady.then(() => {
-    const dir = firstLoadedDir || SKILLS[0];
+    // Saved skill if it's still in the picker, otherwise silently the first one.
+    const saved = [...skillPicker.options].some((o) => o.value === settings.skill) ? settings.skill : null;
+    const dir = saved || firstLoadedDir || SKILLS[0];
     if (dir) applySkill(dir);
     else statusEl.textContent = `three.js r${viewport.threeRevision} · no skills found in /skills — drop a bundle there and reload`;
   });

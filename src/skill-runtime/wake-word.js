@@ -202,6 +202,13 @@ export function createWakeWord({ onWake, threshold = 0.5, cooldownMs = 1500, onS
       // 16 kHz context => the browser resamples the mic for us; the worklet then
       // only has to reframe 128-sample quanta into 1280-sample steps.
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+      // Armed at page load (saved setting), before any click, Chrome's autoplay
+      // policy can leave the context suspended — resume on the first gesture.
+      if (audioCtx.state === 'suspended') {
+        const ctx = audioCtx;
+        const resume = () => { ctx.resume().catch(() => {}); };
+        for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, resume, { once: true, capture: true });
+      }
       await audioCtx.audioWorklet.addModule(`${SHARED_DIR}/wake-word-worklet.js`);
       const src = audioCtx.createMediaStreamSource(micStream);
       node = new AudioWorkletNode(audioCtx, 'wake-word-capture');

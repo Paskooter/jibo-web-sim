@@ -9,8 +9,15 @@
 // Env:  PHOENIX_DIR (default /home/shell/work/phoenix), SECRET, ports.
 
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { WebSocket } from 'ws';
 import { setTimeout as sleep } from 'node:timers/promises';
+
+// Fresh settings file per run (removed on exit): a fixed path would carry the
+// previous run's saved server/skill into this one.
+const SETTINGS_DIR = mkdtempSync(`${tmpdir()}/jibo-sim-settings-`);
+process.on('exit', () => rmSync(SETTINGS_DIR, { recursive: true, force: true }));
 
 const PHOENIX_DIR = process.env.PHOENIX_DIR || '/home/shell/work/phoenix';
 const SECRET = process.env.SECRET || 'phx-it-secret';
@@ -106,7 +113,7 @@ function startGatewayStack() {
 function startSim() {
   const child = spawn('node', ['server.js'], {
     cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, PORT: String(P.sim), HUB_AUTH_SECRET: SECRET },
+    env: { ...process.env, PORT: String(P.sim), HUB_AUTH_SECRET: SECRET, SETTINGS_FILE: `${SETTINGS_DIR}/settings.json` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   procs.push(child);
