@@ -74,7 +74,7 @@ const statusEl = document.getElementById('status');
 const resetBtn = document.getElementById('btn-reset-view');
 const panelsEl = document.getElementById('tab-panels');
 
-const viewport = createViewport(viewportEl);
+const viewport = createViewport(viewportEl, settings.viewport);
 
 resetBtn.addEventListener('click', () => viewport.resetView());
 

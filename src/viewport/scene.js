@@ -7,9 +7,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createJiboRig } from './jibo.js';
 
-export function createViewport(hostEl) {
+// `opts` carries the persisted viewport settings (colours as '#rrggbb').
+export function createViewport(hostEl, { background = '#0b0e12', floorColor = '#141a22' } = {}) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0e12);
+  scene.background = new THREE.Color(background);
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
   // Jibo stands ~0.34 m tall, base resting at y≈0, face pointing +X.
@@ -96,7 +97,7 @@ export function createViewport(hostEl) {
   // mesh bottom sits at y≈0 after the Z-up→Y-up wrapper, so rest it there.
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(0.4, 64),
-    new THREE.MeshStandardMaterial({ color: 0x141a22, roughness: 1 })
+    new THREE.MeshStandardMaterial({ color: floorColor, roughness: 1 })
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = 0;

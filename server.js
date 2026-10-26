@@ -11,7 +11,7 @@ import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { DEFAULTS as SETTINGS_DEFAULTS, validate as validateSettings, merge as mergeSettings } from './src/settings.js';
+import { DEFAULTS as SETTINGS_DEFAULTS, validate as validateSettings, merge as mergeSettings, sanitize as sanitizeSettings } from './src/settings.js';
 
 // Cloud hub auth: the hub accepts a Bearer JWT signed with HS256. The secret
 // and credential identifiers are fully configurable via env vars — any
@@ -240,13 +240,7 @@ function readSettings() {
   }
   const bad = validateSettings(raw);
   if (bad.length) console.warn(`settings: ignoring invalid entries in ${SETTINGS_FILE}: ${bad.join('; ')}`);
-  // Keep only the valid top-level-or-nested entries by re-validating each leaf.
-  const keep = (obj, defs) => Object.fromEntries(Object.entries(obj || {}).flatMap(([k, v]) => {
-    if (!(k in defs)) return [];
-    if (defs[k] !== null && typeof defs[k] === 'object') return [[k, keep(v, defs[k])]];
-    return typeof v === typeof defs[k] ? [[k, v]] : [];
-  }));
-  return mergeSettings(SETTINGS_DEFAULTS, keep(raw, SETTINGS_DEFAULTS));
+  return mergeSettings(SETTINGS_DEFAULTS, sanitizeSettings(raw));
 }
 function writeSettings(settings) {
   const tmp = `${SETTINGS_FILE}.tmp`;

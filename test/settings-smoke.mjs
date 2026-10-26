@@ -57,6 +57,7 @@ const get = async () => (await fetch(base + '/__settings')).json();
 const initial = await get();
 check('file created with defaults on first start', existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).wakeWord === false);
 check('GET returns defaults', initial.wakeWord === false && initial.server === '' && initial.skill === '');
+check('viewport defaults are the original colours', initial.viewport.background === '#0b0e12' && initial.viewport.floorColor === '#141a22');
 
 let r = await put({ wakeWord: true, server: 'hub.local' });
 check('PUT partial update -> 200', r.status === 200);
@@ -66,6 +67,11 @@ check('file on disk updated', JSON.parse(readFileSync(file, 'utf8')).server === 
 
 r = await put({ nope: 1 });
 check('unknown key -> 400', r.status === 400);
+r = await put({ viewport: { background: 'red' } });
+check('bad colour format -> 400', r.status === 400);
+r = await put({ viewport: { floorColor: '#112233' } });
+check('nested partial update keeps siblings', r.status === 200 && (await get()).viewport.background === '#0b0e12');
+await put({ viewport: { floorColor: '#141a22' } });
 r = await put({ wakeWord: 'yes' });
 check('wrong type -> 400', r.status === 400);
 r = await put('{not json');
@@ -81,7 +87,12 @@ const partial = await get();
 check('invalid entries dropped, valid kept', partial.wakeWord === false && partial.server === 'ok.host' && !('stray' in partial));
 
 // ---- Part 2: browser ------------------------------------------------------
-writeFileSync(file, JSON.stringify({ wakeWord: true, skill: 'no-such-skill' }));
+const partialView = await (async () => {
+  writeFileSync(file, JSON.stringify({ viewport: { background: '#336699', floorColor: 'nope' } }));
+  return (await get()).viewport;
+})();
+check('bad nested colour dropped, good one kept', partialView.background === '#336699' && partialView.floorColor === '#141a22');
+writeFileSync(file, JSON.stringify({ wakeWord: true, skill: 'no-such-skill', viewport: { background: '#336699' } }));
 const browser = await puppeteer.launch({
   headless: true,
   executablePath: findChrome(),
@@ -114,6 +125,16 @@ try {
   check('capture AudioContext is running (not autoplay-suspended)', states.length > 0 && states.every((s) => s === 'running'), JSON.stringify(states));
 
   check('checkbox is locked until Start Jibo', await page.evaluate(() => document.getElementById('wake-toggle').disabled === true));
+
+  // The viewport backdrop comes from settings: sample a corner pixel of the canvas.
+  await new Promise((r) => setTimeout(r, 1500));
+  const px = await page.evaluate(() => {
+    const c = document.querySelector('#viewport canvas');
+    const t = document.createElement('canvas'); t.width = c.width; t.height = c.height;
+    const g = t.getContext('2d'); g.drawImage(c, 0, 0);
+    return Array.from(g.getImageData(2, 2, 1, 1).data.slice(0, 3));
+  });
+  check('saved viewport.background is rendered', px.join() === '51,102,153', `got rgb(${px})`);
 
   // Start Jibo loads the saved skill into the iframe; an unknown one must fall
   // back to a real bundle (the picker itself can never hold an unknown value).
