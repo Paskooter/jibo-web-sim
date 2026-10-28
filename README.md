@@ -129,7 +129,7 @@ server.js                       express; cloud WS proxy + cross-origin image pro
 src/
   main.js                       boot: viewport + skill iframe + bridge
   viewport/                     three.js scene + body rig
-  ui/                           sidebar panels (chat / rig / etc.)
+  ui/                           sidebar panels (chat / rig / etc.), screen dock
   bridge/                       host bridge + face overlay homography
   skill-runtime/                in-iframe machinery
     boot.js                       shim mode (own demo skills) | real-runtime mode (user bundle)

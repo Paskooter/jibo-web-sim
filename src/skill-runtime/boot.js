@@ -13,6 +13,7 @@
 // Either way we then fetch the bundle's own index.html and run it as written.
 // The skill dir + entry come from the iframe src: /skill-host.html?dir=…&entry=…
 
+import './webgl-keep-buffer.js';
 import { installJiboShim } from './jibo-shim.js';
 import { createRequire } from './cjs-require.js';
 import { prepareLiveEye, populateExpressionDofs, installExpressionStubs, initOfflineServices, patchBeFramework, driveEye, connectCloud, installIdleMotion } from './live-eye.js';
