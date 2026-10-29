@@ -590,7 +590,7 @@ function _buildHubMessages(path, body, transID) {
       data.asr = {
         hints: body.hintPhrases || [],
         earlyEOS: body.earlyEOS || [],
-        encoding: 'opus',
+        encoding: 'LINEAR16',
         sampleRate: 16000,
         sosTimeout: body.sosTimeout > 0 ? Math.round(body.sosTimeout * 1000) : -1,
         maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
