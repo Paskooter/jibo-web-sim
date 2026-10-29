@@ -53,6 +53,10 @@ export function createViewport(hostEl) {
     // works; ONE is gated by the touches config above.
     // On desktop we gate the master switch on Ctrl, same as before.
     controls.enableRotate = (isTouchDevice || ctrlHeld) && !placementHandler;
+    // OrbitControls turns a Ctrl/Cmd/Shift + ROTATE-button drag into a pan, and
+    // the reverse for a PAN button. While Ctrl is held, map LEFT to PAN so
+    // Ctrl + left-drag orbits.
+    controls.mouseButtons.LEFT = ctrlHeld ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
   };
   updateRotate();
   const isOrbitModifier = () => ctrlHeld;
