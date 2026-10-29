@@ -76,13 +76,25 @@ export function installRigPanel(panelEl, rig) {
   panelEl.appendChild(ledSection);
 
   const colorInput = ledSection.querySelector('#rig-led-color');
+  const powerButton = ledSection.querySelector('#rig-led-off');
+  let ledOff = false;
+  function setLedPowerState(off) {
+    ledOff = off;
+    powerButton.textContent = off ? 'On' : 'Off';
+  }
   colorInput.addEventListener('input', () => {
     stopAnimations();
+    setLedPowerState(false);
     rig.setLEDHex(parseInt(colorInput.value.slice(1), 16));
   });
-  ledSection.querySelector('#rig-led-off').addEventListener('click', () => {
+  powerButton.addEventListener('click', () => {
     stopAnimations();
-    rig.setLEDHex(0x101418);
+    if (ledOff) {
+      rig.setLEDHex(parseInt(colorInput.value.slice(1), 16));
+    } else {
+      rig.setLEDHex(0x101418);
+    }
+    setLedPowerState(!ledOff);
   });
   ledSection.querySelector('#rig-led-rainbow').addEventListener('click', startRainbow);
   ledSection.querySelector('#rig-led-pulse').addEventListener('click', () => startPulse(0x4ec9ff));
@@ -94,7 +106,9 @@ export function installRigPanel(panelEl, rig) {
   panelEl.appendChild(actions);
   actions.querySelector('#rig-reset').addEventListener('click', () => {
     stopAnimations();
+    setLedPowerState(false);
     rig.reset();
+    colorInput.value = '#4ec9ff';
     for (const j of DOFS) {
       sliderState[j.key].input.value = 0;
       sliderState[j.key].out.textContent = '0.000 rad';
@@ -108,6 +122,7 @@ export function installRigPanel(panelEl, rig) {
   }
   function startRainbow() {
     stopAnimations();
+    setLedPowerState(false);
     const start = performance.now();
     const tick = (now) => {
       const t = (now - start) / 1000;
@@ -118,6 +133,7 @@ export function installRigPanel(panelEl, rig) {
   }
   function startPulse(baseColor) {
     stopAnimations();
+    setLedPowerState(false);
     const start = performance.now();
     const r = (baseColor >> 16) & 0xff;
     const g = (baseColor >> 8)  & 0xff;
