@@ -106,6 +106,7 @@ body {
   text-align: center;
   pointer-events: none;
   backdrop-filter: blur(2px);
+  z-index: 6;               /* above the screen dock, which would hide the left of it */
 }
 #subtitle[hidden] { display: none; }
 
@@ -383,6 +384,54 @@ body {
 }
 #photo-thumb[hidden] { display: none; }
 
+/* Screen dock: a flat copy of Jibo's screen, bottom-left of the viewport. */
+#screen-dock {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  width: 400px;
+  max-width: calc(100% - 28px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 5;
+}
+#screen-dock .dock-head {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 26px; padding: 0 4px 0 10px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--fg-dim);
+}
+#screen-dock .dock-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 20px; padding: 0;
+  background: transparent; color: var(--fg-dim);
+  border: 0; border-radius: 3px; cursor: pointer;
+}
+#screen-dock .dock-toggle::before {
+  content: '';
+  box-sizing: border-box;
+  width: 10px; height: 2px;
+  background: currentColor;
+}
+#screen-dock.collapsed .dock-toggle::before {
+  height: 10px;
+  background: none;
+  border: 2px solid currentColor;
+}
+#screen-dock .dock-toggle:hover { color: var(--fg); background: var(--panel-2); }
+#screen-dock .dock-screen {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  cursor: pointer;
+  touch-action: none;
+}
+#screen-dock.collapsed .dock-screen { display: none; }
+
 /* ---------- Mobile / narrow-screen layout ----------------------------------
  * Stack the viewport on top, sidebar below. Bumps tap targets up so buttons
  * are easier to hit with a finger. Triggers on either small width OR coarse
@@ -420,4 +469,6 @@ body {
   }
   /* Photo thumbnail smaller on mobile. */
   #photo-thumb { width: 140px; right: 10px; bottom: 10px; }
+  /* Screen dock smaller on mobile. */
+  #screen-dock { width: 240px; left: 10px; bottom: 10px; }
 }

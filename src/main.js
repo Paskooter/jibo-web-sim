@@ -17,6 +17,8 @@ import { createNotificationBanner } from './ui/notification-banner.js';
 import { createAudioEvent } from './viewport/audio-event.js';
 import { createHostBridge } from './bridge/host-bridge.js';
 import { createFaceOverlay } from './bridge/face-overlay.js';
+import { createFaceGestures } from './ui/face-gestures.js';
+import { createScreenDock } from './ui/screen-dock.js';
 import { createSessionService } from './bridge/services/session-service.js';
 import { createTtsService } from './bridge/services/tts-service.js';
 import { createNluService } from './bridge/services/nlu-service.js';
@@ -244,7 +246,9 @@ async function startSkillRuntime() {
   iframe.allow = 'microphone';   // voice turns: the hub-bridge captures mic inside the iframe
   // allow-same-origin lets the iframe load its ES modules from our dev server;
   // the shim only ever talks to the host via postMessage, so the isolation
-  // contract still holds and a true cross-origin host is a drop-in later.
+  // contract still holds and a true cross-origin host is a drop-in later, except for the
+  // screen dock (ui/screen-dock.js), which reads the face straight from the iframe's
+  // document and so needs it same-origin; it shows a notice when it can't.
   iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   iframe.style.pointerEvents = 'none';   // let OrbitControls own the viewport
   viewportEl.appendChild(iframe);
@@ -512,7 +516,12 @@ async function startSkillRuntime() {
     const hit = tapRay.intersectObject(screenMesh, false)[0];
     return (hit && hit.uv) ? { x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 } : null;
   };
-  let downX = 0, downY = 0, downT = 0, dragging = false, panned = false, pfx = 0, pfy = 0;
+  let inDoubleTapHold = false;
+  const gestures = createFaceGestures({
+    emit: (event, data) => bridge.emit('face', event, data),
+    isBlocked: () => inDoubleTapHold || viewport.isOrbitModifier(),   // camera gesture owns the pointer
+    isHolding: () => inDoubleTapHold,
+  });
 
   // Double-tap-and-hold to camera-pan with one finger. Touch only.
   // The capture-phase handler runs BEFORE the bubble-phase listeners
@@ -521,7 +530,6 @@ async function startSkillRuntime() {
   // already configured and starts panning straight away.
   let activeTouches = 0;
   let lastTapEnd = 0;
-  let inDoubleTapHold = false;
   const DOUBLE_TAP_WINDOW = 350;
   dom.addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'touch') return;
@@ -551,8 +559,8 @@ async function startSkillRuntime() {
       // Record single-finger tap end so the NEXT pointerdown can pair into
       // a double-tap. A real drag still leaves lastTapEnd unset because
       // moving > 6 px during the drag also clears it (handled below).
-      const dx = e.clientX - downX, dy = e.clientY - downY;
-      if (Math.hypot(dx, dy) <= 12 && performance.now() - downT <= DOUBLE_TAP_WINDOW) {
+      const dx = e.clientX - gestures.downX, dy = e.clientY - gestures.downY;
+      if (Math.hypot(dx, dy) <= 12 && performance.now() - gestures.downT <= DOUBLE_TAP_WINDOW) {
         lastTapEnd = performance.now();
       }
     }
@@ -563,36 +571,9 @@ async function startSkillRuntime() {
     lastTapEnd = 0;
   }, true);
 
-  dom.addEventListener('pointerdown', (e) => {
-    downX = e.clientX; downY = e.clientY; downT = performance.now(); dragging = false; panned = false;
-    if (inDoubleTapHold) return;                   // pan-mode drag — leave Jibo alone
-    if (viewport.isOrbitModifier()) return;        // desktop: Ctrl held → camera orbit
-    const f = faceAt(e);
-    if (f) { dragging = true; pfx = f.x; pfy = f.y; }
-  });
-  dom.addEventListener('pointermove', (e) => {
-    if (!dragging || viewport.isOrbitModifier() || inDoubleTapHold) return;
-    if (!panned && Math.hypot(e.clientX - downX, e.clientY - downY) <= 6) return; // ignore tap jitter
-    const f = faceAt(e);
-    if (!f) return;
-    panned = true;
-    bridge.emit('face', 'pan', { x: f.x, y: f.y, movementX: f.x - pfx, movementY: f.y - pfy, isFinal: false });
-    pfx = f.x; pfy = f.y;
-  });
-  dom.addEventListener('pointerup', (e) => {
-    if (inDoubleTapHold) { dragging = false; panned = false; return; }
-    if (dragging && panned) {
-      bridge.emit('face', 'pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
-    } else if (Math.hypot(e.clientX - downX, e.clientY - downY) <= 6 && performance.now() - downT <= 350) {
-      // Tap on the face. Allowed regardless of the orbit modifier state —
-      // a single quick tap is always a face touch (used to tap menu items
-      // etc.). A real drag moves > 6 px before release, so the tap branch
-      // doesn't fire then.
-      const f = faceAt(e);
-      if (f) bridge.emit('face', 'touch', f);
-    }
-    dragging = false; panned = false;
-  });
+  dom.addEventListener('pointerdown', (e) => gestures.down(e, faceAt));
+  dom.addEventListener('pointermove', (e) => gestures.move(e, faceAt));
+  dom.addEventListener('pointerup', (e) => gestures.up(e, faceAt));
 
   const marker = new THREE.Mesh(
     new THREE.SphereGeometry(0.018, 20, 16),
@@ -688,6 +669,14 @@ async function startSkillRuntime() {
     camera: viewport.camera,
   });
   viewport.onFrame(overlay.update);
+
+  // A flat, always-facing copy of Jibo's screen in a corner of the viewport, with the
+  // same touch/pan input, for when the 3D screen is small, skewed or moving.
+  createScreenDock({
+    viewportEl,
+    iframe,
+    emitFace: (event, data) => bridge.emit('face', event, data),
+  });
 
   // Load a skill from its manifest and point the iframe at the bundle entry.
   // Used at boot and when the picker switches skills.
