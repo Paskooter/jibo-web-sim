@@ -10,7 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { WebSocketServer, WebSocket as WS } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { DEFAULTS as SETTINGS_DEFAULTS, validate as validateSettings, merge as mergeSettings, sanitize as sanitizeSettings } from './src/settings.js';
 
 // Cloud hub auth: the hub accepts a Bearer JWT signed with HS256. The secret
 // and credential identifiers are fully configurable via env vars — any
@@ -223,6 +224,45 @@ app.use('/__cloud', express.raw({ type: '*/*', limit: '32mb' }), (req, res) => {
   upreq.on('error', (e) => { res.status(502).type('text/plain').send(`upstream error: ${e.message}`); });
   if (req.body && req.body.length) upreq.write(req.body);
   upreq.end();
+});
+
+// User settings: a gitignored JSON file in the sim root (override the path
+// with SETTINGS_FILE). Created with the defaults on first start so there is a
+// file to hand-edit. Unreadable/invalid files fall back to the defaults, and
+// invalid keys inside an otherwise good file are dropped with a warning.
+const SETTINGS_FILE = process.env.SETTINGS_FILE || join(__dirname, 'settings.json');
+function readSettings() {
+  let raw;
+  try { raw = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
+  catch (e) {
+    if (e.code !== 'ENOENT') console.warn(`settings: ${SETTINGS_FILE} unreadable (${e.message}); using defaults`);
+    return structuredClone(SETTINGS_DEFAULTS);
+  }
+  const bad = validateSettings(raw);
+  if (bad.length) console.warn(`settings: ignoring invalid entries in ${SETTINGS_FILE}: ${bad.join('; ')}`);
+  return mergeSettings(SETTINGS_DEFAULTS, sanitizeSettings(raw));
+}
+function writeSettings(settings) {
+  const tmp = `${SETTINGS_FILE}.tmp`;
+  writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
+  renameSync(tmp, SETTINGS_FILE);   // atomic: a crash never leaves a half-written file
+}
+if (!existsSync(SETTINGS_FILE)) {
+  try { writeSettings(SETTINGS_DEFAULTS); } catch (e) { console.warn(`settings: could not create ${SETTINGS_FILE}: ${e.message}`); }
+}
+app.get('/__settings', (req, res) => res.json(readSettings()));
+// PUT takes a partial update ({ wakeWord: true }). Same-origin fetch only: a
+// cross-site page can't send application/json without a CORS preflight, which
+// this server never answers.
+app.put('/__settings', express.json({ limit: '16kb' }), (req, res) => {
+  if (!req.is('application/json')) return res.status(415).json({ errors: ['Content-Type must be application/json'] });
+  const errors = validateSettings(req.body);
+  if (errors.length) return res.status(400).json({ errors });
+  try {
+    const next = mergeSettings(readSettings(), req.body);
+    writeSettings(next);
+    res.json(next);
+  } catch (e) { res.status(500).json({ errors: [e.message] }); }
 });
 
 // Browser defaults to fetching /favicon.ico — a 204 keeps the address bar

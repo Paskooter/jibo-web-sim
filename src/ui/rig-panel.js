@@ -64,7 +64,7 @@ export function installRigPanel(panelEl, rig) {
     <h3>LED ring</h3>
     <div class="rig-row">
       <label for="rig-led-color">Color</label>
-      <input type="color" id="rig-led-color" value="#4ec9ff">
+      <input type="color" id="rig-led-color" value="#${rig.defaultLEDHex.toString(16).padStart(6, '0')}">
       <button type="button" id="rig-led-off">Off</button>
     </div>
     <div class="rig-row">
@@ -97,7 +97,7 @@ export function installRigPanel(panelEl, rig) {
     setLedPowerState(!ledOff);
   });
   ledSection.querySelector('#rig-led-rainbow').addEventListener('click', startRainbow);
-  ledSection.querySelector('#rig-led-pulse').addEventListener('click', () => startPulse(0x4ec9ff));
+  ledSection.querySelector('#rig-led-pulse').addEventListener('click', () => startPulse(rig.defaultLEDHex));
 
   // Reset
   const actions = document.createElement('section');

@@ -11,3 +11,7 @@ skills/jibo-be/
 # User-supplied launch rule pack — drop a tree here and it's auto-discovered
 rules/*
 !rules/.gitkeep
+
+# Per-user settings (see src/settings.js)
+settings.json
+settings.json.tmp

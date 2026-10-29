@@ -63,7 +63,7 @@ async function fetchJSON(url) {
   return res.json();
 }
 
-export function createJiboRig(scene) {
+export function createJiboRig(scene, { ledColor = 0x4ec9ff } = {}) {
   // Wrapper converts the Z-up skeleton into our Y-up scene.
   const root = new THREE.Group();
   root.name = 'jibo';
@@ -108,7 +108,7 @@ export function createJiboRig(scene) {
 
   function reset() {
     setBottom(0); setMiddle(0); setTop(0);
-    setLEDHex(0x4ec9ff);
+    setLEDHex(ledColor);
     setScreenHex(0x12161c);
   }
 
@@ -215,8 +215,8 @@ export function createJiboRig(scene) {
       }
 
       if (name === 'lightringMeshMesh') {
-        material.emissive.set(0x4ec9ff);
-        material.color.set(0x4ec9ff);
+        material.emissive.set(ledColor);
+        material.color.set(ledColor);
         parts.lightring = mesh;
       } else if (name === 'screenMeshBillboardMesh') {
         // Render-target target; dark panel until the face overlay is mounted.
@@ -253,6 +253,7 @@ export function createJiboRig(scene) {
   return {
     root,
     ready,
+    defaultLEDHex: ledColor,
     get dofMin() { return dofMin; },
     get dofMax() { return dofMax; },
     get dofCyclic() { return dofCyclic; },
