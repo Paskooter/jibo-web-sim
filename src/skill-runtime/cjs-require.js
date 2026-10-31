@@ -559,6 +559,35 @@ function _hubUuid() {
   });
 }
 
+// Data of the CONTEXT message that follows LISTEN (listen turns) and
+// TRIGGER (proactive turns). On the robot the jetstream service fetches
+// it from the skill runtime; the sim sends these defaults.
+function _hubContextData() {
+  // CONTEXT.runtime needs to be structurally complete: the deployed
+  // hub reads `runtime.loop` etc. without null-checks and crashed
+  // with "Cannot read property 'loop' of null" on null runtime. Use
+  // sensible defaults — empty loop/users/peoplePresent, neutral
+  // character, etc.
+  const _runtime = {
+    loop: { loopId: '', jibo: { id: '', birthdate: 0, color: 'WHITE' }, owner: '', users: [] },
+    location: { lng: 0, lat: 0, country: '', countryCode: '', stateAbbr: '', state: '', city: '', iso: new Date().toISOString() },
+    perception: { peoplePresent: [], speaker: null },
+    character: { motivation: { playful: 0, social: 0 }, emotion: { confidence: 0, valence: 0, name: 'NEUTRAL' } },
+    dialog: { referent: null },
+  };
+  // CONTEXT.data.general.release is read by the hub's intent-router
+  // decision mediator. If release < '1.9.0', it overrides certain IR
+  // decisions — notably rewriting `report-skill` + requestNews into
+  // `{skillID:'news'}`, which doesn't exist on current builds (the
+  // news manifest moved into answer-skill RSS). MessagePreProcessor
+  // auto-fills general {accountID,robotID,lang,remoteAddress} but
+  // NOT release, so without us stamping a value the mediator runs
+  // and breaks news. Provide a current release so the mediator
+  // stays out of the way and the IR decision (report-skill) stands.
+  const generalRelease = (typeof window !== 'undefined' && window.__JIBO_RELEASE__) || '1.9.0';
+  return { general: { release: generalRelease }, runtime: _runtime, skill: null };
+}
+
 // Translate a jetstream-client HTTP body into the Hubmsg(s) the hub
 // expects for that path. Returns an array — start_local_turn can be
 // 2 messages (LISTEN + CLIENT_NLU/CLIENT_ASR), most others are single.
@@ -596,31 +625,9 @@ function _buildHubMessages(path, body, transID) {
         maxSpeechTimeout: body.maxSpeechTimeout > 0 ? Math.round(body.maxSpeechTimeout * 1000) : -1,
       };
     }
-    // CONTEXT.runtime needs to be structurally complete: the deployed
-    // hub reads `runtime.loop` etc. without null-checks and crashed
-    // with "Cannot read property 'loop' of null" on null runtime. Use
-    // sensible defaults — empty loop/users/peoplePresent, neutral
-    // character, etc.
-    const _runtime = {
-      loop: { loopId: '', jibo: { id: '', birthdate: 0, color: 'WHITE' }, owner: '', users: [] },
-      location: { lng: 0, lat: 0, country: '', countryCode: '', stateAbbr: '', state: '', city: '', iso: new Date().toISOString() },
-      perception: { peoplePresent: [], speaker: null },
-      character: { motivation: { playful: 0, social: 0 }, emotion: { confidence: 0, valence: 0, name: 'NEUTRAL' } },
-      dialog: { referent: null },
-    };
-    // CONTEXT.data.general.release is read by the hub's intent-router
-    // decision mediator. If release < '1.9.0', it overrides certain IR
-    // decisions — notably rewriting `report-skill` + requestNews into
-    // `{skillID:'news'}`, which doesn't exist on current builds (the
-    // news manifest moved into answer-skill RSS). MessagePreProcessor
-    // auto-fills general {accountID,robotID,lang,remoteAddress} but
-    // NOT release, so without us stamping a value the mediator runs
-    // and breaks news. Provide a current release so the mediator
-    // stays out of the way and the IR decision (report-skill) stands.
-    const generalRelease = (typeof window !== 'undefined' && window.__JIBO_RELEASE__) || '1.9.0';
     const msgs = [
       { type: 'LISTEN', msgID: mid(), ts, data },
-      { type: 'CONTEXT', msgID: mid(), ts, data: { general: { release: generalRelease }, runtime: _runtime, skill: null } },
+      { type: 'CONTEXT', msgID: mid(), ts, data: _hubContextData() },
     ];
     if (body.clientNLU != null) {
       // NLUResult shape: { rules, intent, entities }. The jetstream
@@ -674,7 +681,14 @@ function _buildHubMessages(path, body, transID) {
   }
   if (path === '/proactive/trigger') {
     const data = typeof body === 'object' ? body : { payload: String(body) };
-    return [{ type: 'TRIGGER', msgID: mid(), transID, ts, data }];
+    // Like the robot's jetstream service, follow the TRIGGER with the
+    // CONTEXT on the same socket: the hub waits (30 s) for the context
+    // before it picks a proactive action, and otherwise fails the turn
+    // with TIMEOUT_CONTEXT.
+    return [
+      { type: 'TRIGGER', msgID: mid(), transID, ts, data },
+      { type: 'CONTEXT', msgID: mid(), transID, ts, data: _hubContextData() },
+    ];
   }
   return [];
 }
