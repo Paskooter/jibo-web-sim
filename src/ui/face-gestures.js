@@ -1,26 +1,34 @@
 // Turns pointer input over Jibo's screen into face gestures: a quick click is a
-// tap ('touch'), a drag is a pan, both in face pixel coords. Shared by the 3D
-// screen (raycast) and the screen dock (flat mapping), so both behave the same.
+// tap ('touch'), a drag is a pan, and a quick vertical flick also ends in a
+// 'swipe' (up or down: swipe down closes apps and menus), all in face pixel
+// coords. Shared by the 3D screen (raycast) and the screen dock (flat mapping),
+// so both behave the same.
 //
 // The caller feeds pointer events plus a `faceAt(e)` that maps the event to a
 // face point ({x, y}) or null when it isn't over the screen.
 //   isBlocked(): a camera gesture owns the pointer (Ctrl-orbit, double-tap-hold);
 //                 don't start or continue a pan.
 //   isHolding(): the double-tap-hold camera pan is active; swallow the release.
+// cancel() ends a gesture that was aborted rather than released (pointercancel):
+// it closes an open pan but never sends a tap or a swipe.
 
 const MOVE_SLOP = 6;      // px of jitter still counted as a tap
 const TAP_MAX_MS = 350;
+// The SDK's Hammer swipes: over 30 face px, faster than 0.3 px/ms, mostly vertical.
+// Hammer takes the velocity at release; this uses the average over the whole drag.
+const SWIPE_MIN_PX = 30;
+const SWIPE_MIN_VELOCITY = 0.3;
 
 export function createFaceGestures({ emit, isBlocked = () => false, isHolding = () => false }) {
   let downX = 0, downY = 0, downT = 0;
   let dragging = false, panned = false;
-  let pfx = 0, pfy = 0;
+  let pfx = 0, pfy = 0, sfx = 0, sfy = 0;
 
   function down(e, faceAt) {
     downX = e.clientX; downY = e.clientY; downT = performance.now(); dragging = false; panned = false;
     if (isBlocked()) return;
     const f = faceAt(e);
-    if (f) { dragging = true; pfx = f.x; pfy = f.y; }
+    if (f) { dragging = true; pfx = sfx = f.x; pfy = sfy = f.y; }
   }
 
   function move(e, faceAt) {
@@ -37,6 +45,10 @@ export function createFaceGestures({ emit, isBlocked = () => false, isHolding = 
     if (isHolding()) { dragging = false; panned = false; return; }
     if (dragging && panned) {
       emit('pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
+      const dx = pfx - sfx, dy = pfy - sfy, ms = Math.max(1, performance.now() - downT);
+      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > SWIPE_MIN_PX && Math.abs(dy) / ms > SWIPE_MIN_VELOCITY) {
+        emit('swipe', { direction: dy > 0 ? 'down' : 'up', x: pfx, y: pfy });
+      }
     } else if (Math.hypot(e.clientX - downX, e.clientY - downY) <= MOVE_SLOP && performance.now() - downT <= TAP_MAX_MS) {
       // Tap on the face. Allowed regardless of the orbit modifier state:
       // a single quick tap is always a face touch (used to tap menu items
@@ -48,9 +60,14 @@ export function createFaceGestures({ emit, isBlocked = () => false, isHolding = 
     dragging = false; panned = false;
   }
 
+  function cancel() {
+    if (dragging && panned) emit('pan', { x: pfx, y: pfy, movementX: 0, movementY: 0, isFinal: true });
+    dragging = false; panned = false;
+  }
+
   // Where the last press started, which main.js's double-tap detection needs.
   return {
-    down, move, up,
+    down, move, up, cancel,
     get downX() { return downX; },
     get downY() { return downY; },
     get downT() { return downT; },

@@ -395,6 +395,9 @@ async function bootReal() {
           srcEvent: { movementX: d.movementX || 0, movementY: d.movementY || 0 },
           pointers: [{ clientX: d.x || 0, clientY: d.y || 0 }],
         });
+      } else if (m.event === 'swipe' && g.spoofGesture) {
+        // Vertical flick -> the face's swipe recognizers (swipe down closes apps and menus).
+        g.spoofGesture(d.direction === 'up' ? 'swipeup' : 'swipedown', d.x || 640, d.y || 360);
       }
     } catch (e) { console.warn('[boot] gesture forward:', e.message); }
   });
