@@ -206,7 +206,7 @@ export function createScreenDock({ viewportEl, iframe, emitFace }) {
   const abort = (e) => {
     if (e.pointerId !== activeId) return;
     activeId = null;
-    gestures.up(e, () => null);
+    gestures.cancel();
   };
   screen.addEventListener('pointercancel', abort);
   screen.addEventListener('lostpointercapture', abort);

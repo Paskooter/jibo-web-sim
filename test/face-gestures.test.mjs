@@ -91,6 +91,44 @@ const tests = {
     g.down(ev(0, 0), onScreen); now += 20; g.up(ev(0, 0), offScreen);
     assert.deepEqual(out, [], 'a cancelled press is not a tap');
   },
+  'a quick downward flick pans, then ends in a swipe down at the last point'() {
+    const { g, out } = setup();
+    g.down(ev(600, 200), onScreen); g.move(ev(605, 300), onScreen); g.move(ev(610, 420), onScreen);
+    now += 150; g.up(ev(610, 420), onScreen);
+    assert.deepEqual(out.map((e) => e.event), ['pan', 'pan', 'pan', 'swipe']);
+    assert.deepEqual(out[3], { event: 'swipe', direction: 'down', x: 610, y: 420 });
+  },
+  'a quick upward flick ends in a swipe up'() {
+    const { g, out } = setup();
+    g.down(ev(600, 500), onScreen); g.move(ev(600, 300), onScreen); now += 100; g.up(ev(600, 300), onScreen);
+    assert.deepEqual(out.at(-1), { event: 'swipe', direction: 'up', x: 600, y: 300 });
+  },
+  'slow, short or mostly sideways drags are not swipes'() {
+    const swipes = (from, to, ms) => {
+      const { g, out } = setup();
+      g.down(ev(...from), onScreen); g.move(ev(...to), onScreen); now += ms; g.up(ev(...to), onScreen);
+      return out.filter((e) => e.event === 'swipe').length;
+    };
+    assert.equal(swipes([600, 200], [600, 420], 2000), 0, 'slow vertical drag (scrolling)');
+    assert.equal(swipes([600, 200], [600, 225], 20), 0, 'under 30 px');
+    assert.equal(swipes([300, 200], [700, 320], 150), 0, 'mostly sideways (paging)');
+  },
+  'a cancelled fast flick closes the pan but sends no swipe or tap'() {
+    const { g, out } = setup();
+    g.down(ev(600, 200), onScreen); g.move(ev(600, 420), onScreen); now += 100; g.cancel();
+    assert.deepEqual(out.map((e) => e.event), ['pan', 'pan']);
+    assert.equal(out[1].isFinal, true);
+    out.length = 0;
+    g.down(ev(0, 0), onScreen); now += 20; g.cancel();
+    assert.deepEqual(out, [], 'a cancelled press is not a tap');
+    now += 1000; g.down(ev(7, 7), onScreen); now += 60; g.up(ev(7, 7), onScreen);
+    assert.deepEqual(out, [{ event: 'touch', x: 7, y: 7 }], 'state is reset');
+  },
+  'a swallowed release (camera hold) sends no swipe'() {
+    const { g, out } = setup({ isHolding: () => true });
+    g.down(ev(600, 200), onScreen); g.move(ev(600, 420), onScreen); now += 100; g.up(ev(600, 420), onScreen);
+    assert.ok(!out.some((e) => e.event === 'swipe'));
+  },
 };
 
 let failed = 0;
